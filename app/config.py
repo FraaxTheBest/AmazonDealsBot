@@ -10,7 +10,12 @@ class Settings(BaseSettings):
 
     bot_token: SecretStr
     admin_user_id: int
+
     app_env: Literal["development", "production"] = "development"
+
+    database_url: str = (
+        "sqlite+aiosqlite:///./amazondealsbot.db"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
