@@ -31,6 +31,25 @@ class CreatePostStates(StatesGroup):
     waiting_product = State()
 
 
+def get_product_url(
+    product: ProductSnapshot,
+) -> str:
+    """
+    Sceglie il miglior link disponibile.
+
+    Priorità:
+    1. amzn.to affiliato
+    2. link affiliato lungo
+    3. link normale Amazon
+    """
+
+    return (
+        getattr(product, "affiliate_short_url", None)
+        or getattr(product, "affiliate_url", None)
+        or product.detail_url
+    )
+
+
 def channel_selection_keyboard(
     channels: list[Channel],
 ) -> InlineKeyboardMarkup:
@@ -51,8 +70,8 @@ def channel_selection_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="❌ Annulla",
-                callback_data="post:cancel",
+                text="🏠 Menu principale",
+                callback_data="menu:home",
             )
         ]
     )
@@ -62,15 +81,36 @@ def channel_selection_keyboard(
     )
 
 
+def product_input_keyboard() -> InlineKeyboardMarkup:
+    """Pulsanti della schermata inserimento prodotto."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Indietro",
+                    callback_data="post:back_channels",
+                ),
+                InlineKeyboardButton(
+                    text="🏠 Home",
+                    callback_data="menu:home",
+                ),
+            ]
+        ]
+    )
+
+
 def preview_keyboard(
     product: ProductSnapshot,
 ) -> InlineKeyboardMarkup:
+    public_url = get_product_url(product)
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="🔗 Apri su Amazon.it",
-                    url=product.detail_url,
+                    url=public_url,
                 )
             ],
             [
@@ -81,6 +121,16 @@ def preview_keyboard(
                 InlineKeyboardButton(
                     text="❌ SCARTA",
                     callback_data="post:cancel",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Cambia prodotto",
+                    callback_data="post:retry_product",
+                ),
+                InlineKeyboardButton(
+                    text="🏠 Home",
+                    callback_data="menu:home",
                 ),
             ],
         ]
@@ -126,16 +176,59 @@ def product_preview(
 def channel_post_text(
     product: ProductSnapshot,
 ) -> str:
+    public_url = get_product_url(product)
+
+    rating = getattr(
+        product,
+        "rating",
+        None,
+    )
+
+    reviews_count = getattr(
+        product,
+        "reviews_count",
+        None,
+    )
+
+    seller = getattr(
+        product,
+        "seller",
+        None,
+    )
+
+    ships_from = getattr(
+        product,
+        "ships_from",
+        None,
+    )
+
+    rating_text = ""
+
+    if rating is not None:
+        rating_text = (
+            f"\n⭐ {reviews_count or 0} Recensioni: "
+            f"{rating} / 5.0"
+        )
+
+    seller_text = ""
+
+    if seller and ships_from:
+        seller_text = (
+            f"\n📦 Venduto da {escape(seller)} "
+            f"e spedito da {escape(ships_from)}"
+        )
+
     return (
         "🧪 <b>POST DEMO AmazonDealsBot</b>\n\n"
-        f"🔥 <b>{escape(product.title)}</b>\n\n"
-        f"❌ Prima: "
-        f"{format_money(product.original_price)}\n"
-        f"✅ Ora: "
-        f"<b>{format_money(product.current_price)}</b>\n"
-        f"📉 Sconto: "
-        f"<b>{product.discount_percentage or 0}%</b>\n\n"
-        f"📦 {escape(product.availability or 'N/D')}\n\n"
+        f"👀 <b>{escape(product.title)}</b>\n\n"
+        f"💰 A soli "
+        f"<b>{format_money(product.current_price)}</b>"
+        f" invece di "
+        f"{format_money(product.original_price)} "
+        f"(-{product.discount_percentage or 0}%)\n\n"
+        f"🔎 {public_url}"
+        f"{rating_text}"
+        f"{seller_text}\n\n"
         "⚠️ Dati demo: provider Amazon "
         "reale non ancora collegato."
     )
@@ -220,13 +313,46 @@ async def select_post_channel(
             "🔗 <b>Inserisci prodotto</b>\n\n"
             f"Canale: "
             f"<b>{escape(channel.title)}</b>\n\n"
-            "Incolla un URL Amazon.it "
-            "oppure direttamente l'ASIN.\n\n"
+            "Puoi inviare:\n\n"
+            "• un normale URL Amazon.it\n"
+            "• un link corto amzn.to\n"
+            "• direttamente l'ASIN\n\n"
             "Esempio:\n"
             "<code>"
             "https://www.amazon.it/dp/"
             "B00KL8SM92"
-            "</code>"
+            "</code>",
+            reply_markup=product_input_keyboard(),
+        )
+
+    await query.answer()
+
+
+@router.callback_query(
+    F.data == "post:back_channels"
+)
+async def back_to_channel_selection(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    settings = get_settings()
+
+    await state.clear()
+
+    channels = await list_channels(
+        settings.admin_user_id
+    )
+
+    if query.message is not None:
+        await query.message.edit_text(
+            "➕ <b>Crea Post</b>\n\n"
+            "Scegli il canale in cui "
+            "pubblicare:",
+            reply_markup=(
+                channel_selection_keyboard(
+                    channels
+                )
+            ),
         )
 
     await query.answer()
@@ -241,8 +367,9 @@ async def receive_product(
 ) -> None:
     if not message.text:
         await message.answer(
-            "❌ Invia un URL Amazon.it "
-            "oppure un ASIN."
+            "❌ Invia un URL Amazon.it, "
+            "un link amzn.to oppure un ASIN.",
+            reply_markup=product_input_keyboard(),
         )
         return
 
@@ -254,9 +381,12 @@ async def receive_product(
         await message.answer(
             "❌ Non riesco a trovare "
             "un ASIN valido.\n\n"
-            "Usa un normale link Amazon.it "
-            "contenente /dp/ oppure "
-            "invia direttamente l'ASIN."
+            "Puoi utilizzare:\n"
+            "• link Amazon.it\n"
+            "• link amzn.to\n"
+            "• ASIN di 10 caratteri\n\n"
+            "Puoi anche tornare indietro.",
+            reply_markup=product_input_keyboard(),
         )
         return
 
@@ -276,6 +406,61 @@ async def receive_product(
             product
         ),
     )
+
+
+@router.callback_query(
+    F.data == "post:retry_product"
+)
+async def retry_product(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+
+    channel_id = data.get(
+        "channel_id"
+    )
+
+    if channel_id is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+        return
+
+    settings = get_settings()
+
+    channel = await get_channel(
+        int(channel_id),
+        settings.admin_user_id,
+    )
+
+    if channel is None:
+        await query.answer(
+            "Canale non trovato.",
+            show_alert=True,
+        )
+        return
+
+    await state.update_data(
+        product=None
+    )
+
+    await state.set_state(
+        CreatePostStates.waiting_product
+    )
+
+    if query.message is not None:
+        await query.message.edit_text(
+            "🔗 <b>Inserisci prodotto</b>\n\n"
+            f"Canale: "
+            f"<b>{escape(channel.title)}</b>\n\n"
+            "Incolla un nuovo URL Amazon.it, "
+            "un link amzn.to oppure l'ASIN.",
+            reply_markup=product_input_keyboard(),
+        )
+
+    await query.answer()
 
 
 @router.callback_query(
@@ -307,6 +492,7 @@ async def publish_post(
             "Ricomincia da Crea Post.",
             show_alert=True,
         )
+
         await state.clear()
         return
 
@@ -326,12 +512,16 @@ async def publish_post(
         product_data
     )
 
+    public_url = get_product_url(
+        product
+    )
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🛒 Apri offerta",
-                    url=product.detail_url,
+                    text="Vedi offerta 👀",
+                    url=public_url,
                 )
             ]
         ]
@@ -359,7 +549,17 @@ async def publish_post(
         await query.message.edit_text(
             "✅ <b>Post pubblicato!</b>\n\n"
             f"📢 Canale: "
-            f"<b>{escape(channel.title)}</b>"
+            f"<b>{escape(channel.title)}</b>",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🏠 Menu principale",
+                            callback_data="menu:home",
+                        )
+                    ]
+                ]
+            ),
         )
 
     await query.answer(
@@ -378,9 +578,17 @@ async def cancel_post(
 
     if query.message is not None:
         await query.message.edit_text(
-            "❌ Creazione post annullata.\n\n"
-            "Usa /start per tornare "
-            "al menu principale."
+            "❌ Creazione post annullata.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🏠 Menu principale",
+                            callback_data="menu:home",
+                        )
+                    ]
+                ]
+            ),
         )
 
     await query.answer()
