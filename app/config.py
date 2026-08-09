@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     database_url: str = (
         "sqlite+aiosqlite:///./amazondealsbot.db"
     )
-
+    amazon_partner_tag: str = "example-21"
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
