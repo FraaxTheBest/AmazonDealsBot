@@ -5,11 +5,29 @@ from app.amazon.models import ProductSnapshot
 from app.config import get_settings
 
 
-DEMO_IMAGE_URL = (
+DEMO_PRIMARY_IMAGE = (
     "https://placehold.co/"
     "1200x1200/png"
-    "?text=AmazonDealsBot+DEMO"
+    "?text=PRIMARY+IMAGE+DEMO"
 )
+
+DEMO_VARIANT_IMAGES = [
+    (
+        "https://placehold.co/"
+        "1200x1200/png"
+        "?text=VARIANTE+2+DEMO"
+    ),
+    (
+        "https://placehold.co/"
+        "1200x1200/png"
+        "?text=VARIANTE+3+DEMO"
+    ),
+    (
+        "https://placehold.co/"
+        "1200x1200/png"
+        "?text=VARIANTE+4+DEMO"
+    ),
+]
 
 
 class AmazonProvider(Protocol):
@@ -39,32 +57,49 @@ class MockAmazonProvider:
                 f"({asin})"
             ),
             brand="AmazonDealsBot Demo",
+
             detail_url=(
                 f"https://www.amazon.it/"
                 f"dp/{asin}"
             ),
+
             affiliate_url=affiliate_url,
+
             affiliate_short_url=None,
 
-            # FOTO DEMO.
-            # Il provider Amazon reale
-            # metterà qui la foto vera.
-            image_url=DEMO_IMAGE_URL,
+            # La PRIMARY viene scelta
+            # automaticamente.
+            image_url=DEMO_PRIMARY_IMAGE,
+
+            primary_image_url=(
+                DEMO_PRIMARY_IMAGE
+            ),
+
+            variant_image_urls=(
+                DEMO_VARIANT_IMAGES
+            ),
 
             current_price=Decimal(
                 "79.99"
             ),
+
             original_price=Decimal(
                 "99.99"
             ),
+
             discount_percentage=Decimal(
                 "20"
             ),
+
             rating=Decimal(
                 "4.7"
             ),
+
             reviews_count=66,
+
             availability="Disponibile",
+
             seller="AmazonDealsBot Demo",
+
             ships_from="Amazon",
         )
