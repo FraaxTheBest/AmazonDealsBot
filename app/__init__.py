@@ -1,0 +1,1 @@
+"""AmazonDealsBot application package."""
