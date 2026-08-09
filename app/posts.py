@@ -246,7 +246,7 @@ async def receive_product(
         )
         return
 
-    asin = extract_asin(
+    asin = await extract_asin(
         message.text
     )
 
