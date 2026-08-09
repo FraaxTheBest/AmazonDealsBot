@@ -3,8 +3,15 @@ import logging
 import sys
 from html import escape
 
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
+from aiogram import (
+    Bot,
+    Dispatcher,
+    F,
+    Router,
+)
+from aiogram.client.default import (
+    DefaultBotProperties,
+)
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -15,46 +22,71 @@ from aiogram.types import (
     Message,
 )
 
-from app.channels import router as channels_router
-from app.posts import router as posts_router
+from app.channels import (
+    router as channels_router,
+)
 from app.config import get_settings
-from app.database import init_db, register_user
+from app.database import (
+    init_db,
+    register_user,
+)
+from app.posts import (
+    router as posts_router,
+)
+from app.templates import (
+    router as templates_router,
+)
 
 
-router = Router(name="main")
+router = Router(
+    name="main"
+)
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
+def main_menu_keyboard(
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="📢 Canali",
-                    callback_data="menu:channels",
+                    callback_data=(
+                        "menu:channels"
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="➕ Crea Post",
-                    callback_data="menu:create_post",
+                    callback_data=(
+                        "menu:create_post"
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="🤖 Autoposting",
-                    callback_data="menu:autopost",
+                    callback_data=(
+                        "menu:autopost"
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="📝 Template",
-                    callback_data="menu:templates",
+                    callback_data=(
+                        "menu:templates"
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="📊 Statistiche",
-                    callback_data="menu:stats",
+                    callback_data=(
+                        "menu:stats"
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="⚙️ Impostazioni",
-                    callback_data="menu:settings",
+                    callback_data=(
+                        "menu:settings"
+                    ),
                 ),
             ],
         ]
@@ -71,17 +103,19 @@ def main_menu_text(
     return (
         "🛒 <b>AmazonDealsBot</b>\n\n"
         f"👋 Ciao <b>{name}</b>!\n"
-        "🔐 Ruolo: 👑 Amministratore\n\n"
+        "🔐 Ruolo: 👑 Amministratore"
+        "\n\n"
         "Seleziona una funzione:"
     )
 
 
-@router.message(CommandStart())
+@router.message(
+    CommandStart()
+)
 async def start_handler(
     message: Message,
     state: FSMContext,
 ) -> None:
-    # /start annulla qualsiasi procedura aperta.
     await state.clear()
 
     if message.from_user is None:
@@ -96,14 +130,21 @@ async def start_handler(
 
     if not is_admin:
         await message.answer(
-            "⛔ <b>Accesso non autorizzato.</b>"
+            "⛔ <b>Accesso non "
+            "autorizzato.</b>"
         )
         return
 
     await register_user(
-        telegram_user_id=message.from_user.id,
-        username=message.from_user.username,
-        first_name=message.from_user.first_name,
+        telegram_user_id=(
+            message.from_user.id
+        ),
+        username=(
+            message.from_user.username
+        ),
+        first_name=(
+            message.from_user.first_name
+        ),
         is_admin=True,
     )
 
@@ -111,7 +152,9 @@ async def start_handler(
         main_menu_text(
             message.from_user.first_name
         ),
-        reply_markup=main_menu_keyboard(),
+        reply_markup=(
+            main_menu_keyboard()
+        ),
     )
 
 
@@ -122,7 +165,6 @@ async def back_home(
     query: CallbackQuery,
     state: FSMContext,
 ) -> None:
-    # Anche Home annulla eventuali FSM attivi.
     await state.clear()
 
     if query.message is not None:
@@ -130,7 +172,9 @@ async def back_home(
             main_menu_text(
                 query.from_user.first_name
             ),
-            reply_markup=main_menu_keyboard(),
+            reply_markup=(
+                main_menu_keyboard()
+            ),
         )
 
     await query.answer()
@@ -138,9 +182,6 @@ async def back_home(
 
 @router.callback_query(
     F.data == "menu:autopost"
-)
-@router.callback_query(
-    F.data == "menu:templates"
 )
 @router.callback_query(
     F.data == "menu:stats"
@@ -152,10 +193,12 @@ async def future_sections(
     query: CallbackQuery,
 ) -> None:
     names = {
-        "menu:autopost": "🤖 Autoposting",
-        "menu:templates": "📝 Template",
-        "menu:stats": "📊 Statistiche",
-        "menu:settings": "⚙️ Impostazioni",
+        "menu:autopost":
+            "🤖 Autoposting",
+        "menu:stats":
+            "📊 Statistiche",
+        "menu:settings":
+            "⚙️ Impostazioni",
     }
 
     section = names.get(
@@ -173,6 +216,11 @@ async def future_sections(
 async def main() -> None:
     settings = get_settings()
 
+    # A questo punto PostTemplate
+    # è già stato importato tramite
+    # app.templates / template_store.
+    # create_all crea quindi anche
+    # la tabella post_templates.
     await init_db()
 
     logging.info(
@@ -184,15 +232,19 @@ async def main() -> None:
             settings.bot_token
             .get_secret_value()
         ),
-        default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML,
+        default=(
+            DefaultBotProperties(
+                parse_mode=(
+                    ParseMode.HTML
+                ),
+            )
         ),
     )
 
     dispatcher = Dispatcher()
 
-    # Il router MAIN va per primo:
-    # così /start funziona anche quando sei dentro una FSM.
+    # MAIN per primo così /start
+    # può interrompere qualsiasi FSM.
     dispatcher.include_router(
         router
     )
@@ -205,6 +257,10 @@ async def main() -> None:
         posts_router
     )
 
+    dispatcher.include_router(
+        templates_router
+    )
+
     await bot.delete_webhook(
         drop_pending_updates=True
     )
@@ -213,7 +269,9 @@ async def main() -> None:
         "AmazonDealsBot avviato."
     )
 
-    await dispatcher.start_polling(bot)
+    await dispatcher.start_polling(
+        bot
+    )
 
 
 if __name__ == "__main__":
@@ -221,9 +279,13 @@ if __name__ == "__main__":
         level=logging.INFO,
         stream=sys.stdout,
         format=(
-            "%(asctime)s | %(levelname)s | "
-            "%(name)s | %(message)s"
+            "%(asctime)s | "
+            "%(levelname)s | "
+            "%(name)s | "
+            "%(message)s"
         ),
     )
 
-    asyncio.run(main())
+    asyncio.run(
+        main()
+    )
