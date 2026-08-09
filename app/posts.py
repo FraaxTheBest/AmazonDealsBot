@@ -23,8 +23,12 @@ from app.database import (
     list_channels,
 )
 from app.template_engine import (
+    DEFAULT_POST_TEMPLATE,
     get_public_url,
-    render_post,
+    render_template,
+)
+from app.template_store import (
+    get_default_template_content,
 )
 
 
@@ -37,14 +41,41 @@ class CreatePostStates(StatesGroup):
     waiting_product = State()
 
 
+async def render_saved_template(
+    product: ProductSnapshot,
+) -> str:
+    """
+    Carica dal database il template
+    configurato dall'amministratore.
+    """
+
+    settings = get_settings()
+
+    content = (
+        await get_default_template_content(
+            settings.admin_user_id,
+            DEFAULT_POST_TEMPLATE,
+        )
+    )
+
+    try:
+        return render_template(
+            content,
+            product,
+        )
+
+    except ValueError:
+        # Sicurezza: se il template nel DB
+        # fosse danneggiato usiamo il default.
+        return render_template(
+            DEFAULT_POST_TEMPLATE,
+            product,
+        )
+
+
 def is_amzn_short_url(
     value: str,
 ) -> bool:
-    """
-    Controlla se il testo inserito
-    è un link corto ufficiale amzn.to.
-    """
-
     try:
         parsed = urlparse(
             value.strip()
@@ -60,9 +91,15 @@ def is_amzn_short_url(
     )
 
     return (
-        parsed.scheme in {"http", "https"}
+        parsed.scheme in {
+            "http",
+            "https",
+        }
         and hostname
-        in {"amzn.to", "www.amzn.to"}
+        in {
+            "amzn.to",
+            "www.amzn.to",
+        }
     )
 
 
@@ -167,14 +204,14 @@ def preview_keyboard(
 
 
 def product_preview(
-    product: ProductSnapshot,
+    rendered_post: str,
 ) -> str:
     return (
         "🧪 <b>ANTEPRIMA TEMPLATE</b>\n"
         "⚠️ I dati prodotto sono ancora "
         "MOCK.\n\n"
         "────────────────\n\n"
-        f"{render_post(product)}"
+        f"{rendered_post}"
     )
 
 
@@ -254,7 +291,8 @@ async def select_post_channel(
 
     if query.message is not None:
         await query.message.edit_text(
-            "🔗 <b>Inserisci prodotto</b>\n\n"
+            "🔗 <b>Inserisci prodotto</b>"
+            "\n\n"
             f"Canale: "
             f"<b>{escape(channel.title)}</b>"
             "\n\n"
@@ -350,8 +388,6 @@ async def receive_product(
         )
     )
 
-    # Se l'utente ha inserito un vero
-    # amzn.to, conserviamo proprio quello.
     if is_amzn_short_url(
         submitted_value
     ):
@@ -368,8 +404,16 @@ async def receive_product(
         )
     )
 
+    rendered_post = (
+        await render_saved_template(
+            product
+        )
+    )
+
     await message.answer(
-        product_preview(product),
+        product_preview(
+            rendered_post
+        ),
         reply_markup=(
             preview_keyboard(product)
         ),
@@ -507,8 +551,14 @@ async def publish_post(
         ]
     )
 
+    rendered_post = (
+        await render_saved_template(
+            product
+        )
+    )
+
     post_text = (
-        render_post(product)
+        rendered_post
         + "\n\n"
         "⚠️ <i>Dati demo: provider "
         "Amazon reale non ancora "
@@ -522,9 +572,6 @@ async def publish_post(
             ),
             text=post_text,
             reply_markup=keyboard,
-
-            # Niente riquadro/anteprima
-            # automatica del link Amazon.
             link_preview_options=(
                 LinkPreviewOptions(
                     is_disabled=True
