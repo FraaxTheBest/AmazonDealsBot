@@ -1,6 +1,14 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, select
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    select,
+)
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     async_sessionmaker,
@@ -74,6 +82,64 @@ class User(Base):
     )
 
 
+class Channel(Base):
+    __tablename__ = "channels"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    telegram_chat_id: Mapped[int] = mapped_column(
+        BigInteger,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    username: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    can_post_messages: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
 async def init_db() -> None:
     """Crea le tabelle mancanti."""
 
@@ -87,7 +153,7 @@ async def register_user(
     first_name: str | None,
     is_admin: bool,
 ) -> User:
-    """Registra l'utente oppure aggiorna i suoi dati."""
+    """Registra o aggiorna un utente."""
 
     async with SessionLocal() as session:
         result = await session.execute(
@@ -117,3 +183,138 @@ async def register_user(
         await session.commit()
 
         return user
+
+
+async def save_channel(
+    owner_telegram_user_id: int,
+    telegram_chat_id: int,
+    title: str,
+    username: str | None,
+    can_post_messages: bool,
+) -> Channel:
+    """Salva oppure aggiorna un canale."""
+
+    async with SessionLocal() as session:
+        owner_result = await session.execute(
+            select(User).where(
+                User.telegram_user_id == owner_telegram_user_id
+            )
+        )
+
+        owner = owner_result.scalar_one_or_none()
+
+        if owner is None:
+            raise ValueError("Utente proprietario non registrato.")
+
+        result = await session.execute(
+            select(Channel).where(
+                Channel.telegram_chat_id == telegram_chat_id
+            )
+        )
+
+        channel = result.scalar_one_or_none()
+
+        if channel is None:
+            channel = Channel(
+                owner_id=owner.id,
+                telegram_chat_id=telegram_chat_id,
+                title=title,
+                username=username,
+                can_post_messages=can_post_messages,
+                is_active=True,
+            )
+
+            session.add(channel)
+
+        else:
+            channel.owner_id = owner.id
+            channel.title = title
+            channel.username = username
+            channel.can_post_messages = can_post_messages
+            channel.is_active = True
+            channel.updated_at = datetime.now(timezone.utc)
+
+        await session.commit()
+        await session.refresh(channel)
+
+        return channel
+
+
+async def list_channels(
+    owner_telegram_user_id: int,
+) -> list[Channel]:
+    """Restituisce i canali attivi dell'utente."""
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Channel)
+            .join(
+                User,
+                Channel.owner_id == User.id,
+            )
+            .where(
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                Channel.is_active.is_(True),
+            )
+            .order_by(Channel.title)
+        )
+
+        return list(result.scalars().all())
+
+
+async def get_channel(
+    channel_id: int,
+    owner_telegram_user_id: int,
+) -> Channel | None:
+    """Restituisce un canale appartenente all'utente."""
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Channel)
+            .join(
+                User,
+                Channel.owner_id == User.id,
+            )
+            .where(
+                Channel.id == channel_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                Channel.is_active.is_(True),
+            )
+        )
+
+        return result.scalar_one_or_none()
+
+
+async def disable_channel(
+    channel_id: int,
+    owner_telegram_user_id: int,
+) -> bool:
+    """Disattiva un canale senza cancellarne i dati."""
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Channel)
+            .join(
+                User,
+                Channel.owner_id == User.id,
+            )
+            .where(
+                Channel.id == channel_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+            )
+        )
+
+        channel = result.scalar_one_or_none()
+
+        if channel is None:
+            return False
+
+        channel.is_active = False
+        channel.updated_at = datetime.now(timezone.utc)
+
+        await session.commit()
+
+        return True
