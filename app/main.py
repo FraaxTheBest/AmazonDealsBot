@@ -15,6 +15,7 @@ from aiogram.types import (
 )
 
 from app.channels import router as channels_router
+from app.posts import router as posts_router
 from app.config import get_settings
 from app.database import init_db, register_user
 
@@ -109,9 +110,6 @@ async def start_handler(
     )
 
 
-@router.callback_query(
-    F.data == "menu:home"
-)
 async def back_home(
     query: CallbackQuery,
 ) -> None:
@@ -145,7 +143,6 @@ async def future_sections(
     query: CallbackQuery,
 ) -> None:
     names = {
-        "menu:create_post": "➕ Crea Post",
         "menu:autopost": "🤖 Autoposting",
         "menu:templates": "📝 Template",
         "menu:stats": "📊 Statistiche",
@@ -189,6 +186,10 @@ async def main() -> None:
         channels_router
     )
 
+    dispatcher.include_router(
+        posts_router
+    )
+    
     dispatcher.include_router(
         router
     )
