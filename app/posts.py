@@ -1,4 +1,5 @@
 from html import escape
+from urllib.parse import urlparse
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -8,6 +9,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LinkPreviewOptions,
     Message,
 )
 
@@ -20,6 +22,10 @@ from app.database import (
     get_channel,
     list_channels,
 )
+from app.template_engine import (
+    get_public_url,
+    render_post,
+)
 
 
 router = Router(name="posts")
@@ -31,22 +37,32 @@ class CreatePostStates(StatesGroup):
     waiting_product = State()
 
 
-def get_product_url(
-    product: ProductSnapshot,
-) -> str:
+def is_amzn_short_url(
+    value: str,
+) -> bool:
     """
-    Sceglie il miglior link disponibile.
+    Controlla se il testo inserito
+    è un link corto ufficiale amzn.to.
+    """
 
-    Priorità:
-    1. amzn.to affiliato
-    2. link affiliato lungo
-    3. link normale Amazon
-    """
+    try:
+        parsed = urlparse(
+            value.strip()
+        )
+
+    except ValueError:
+        return False
+
+    hostname = (
+        parsed.hostname.lower()
+        if parsed.hostname
+        else ""
+    )
 
     return (
-        getattr(product, "affiliate_short_url", None)
-        or getattr(product, "affiliate_url", None)
-        or product.detail_url
+        parsed.scheme in {"http", "https"}
+        and hostname
+        in {"amzn.to", "www.amzn.to"}
     )
 
 
@@ -59,9 +75,13 @@ def channel_selection_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"📢 {channel.title[:35]}",
+                    text=(
+                        f"📢 "
+                        f"{channel.title[:35]}"
+                    ),
                     callback_data=(
-                        f"post:channel:{channel.id}"
+                        f"post:channel:"
+                        f"{channel.id}"
                     ),
                 )
             ]
@@ -81,15 +101,16 @@ def channel_selection_keyboard(
     )
 
 
-def product_input_keyboard() -> InlineKeyboardMarkup:
-    """Pulsanti della schermata inserimento prodotto."""
-
+def product_input_keyboard(
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="⬅️ Indietro",
-                    callback_data="post:back_channels",
+                    callback_data=(
+                        "post:back_channels"
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="🏠 Home",
@@ -103,30 +124,38 @@ def product_input_keyboard() -> InlineKeyboardMarkup:
 def preview_keyboard(
     product: ProductSnapshot,
 ) -> InlineKeyboardMarkup:
-    public_url = get_product_url(product)
+    public_url = get_public_url(
+        product
+    )
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔗 Apri su Amazon.it",
+                    text="Vedi offerta 👀",
                     url=public_url,
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="✅ PUBBLICA",
-                    callback_data="post:publish",
+                    callback_data=(
+                        "post:publish"
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="❌ SCARTA",
-                    callback_data="post:cancel",
+                    callback_data=(
+                        "post:cancel"
+                    ),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="⬅️ Cambia prodotto",
-                    callback_data="post:retry_product",
+                    callback_data=(
+                        "post:retry_product"
+                    ),
                 ),
                 InlineKeyboardButton(
                     text="🏠 Home",
@@ -137,100 +166,15 @@ def preview_keyboard(
     )
 
 
-def format_money(
-    value,
-) -> str:
-    if value is None:
-        return "N/D"
-
-    return (
-        f"{value:.2f}"
-        .replace(".", ",")
-        + " €"
-    )
-
-
 def product_preview(
     product: ProductSnapshot,
 ) -> str:
     return (
-        "🧪 <b>ANTEPRIMA DEMO</b>\n"
-        "⚠️ Dati MOCK, non ancora presi "
-        "da Amazon.\n\n"
-        f"📦 <b>{escape(product.title)}</b>\n\n"
-        f"🏷 ASIN: "
-        f"<code>{product.asin}</code>\n"
-        f"🏭 Brand: "
-        f"{escape(product.brand or 'N/D')}\n\n"
-        f"❌ Prima: "
-        f"{format_money(product.original_price)}\n"
-        f"✅ Ora: "
-        f"<b>{format_money(product.current_price)}</b>\n"
-        f"📉 Sconto: "
-        f"{product.discount_percentage or 0}%\n\n"
-        f"📦 Disponibilità: "
-        f"{escape(product.availability or 'N/D')}"
-    )
-
-
-def channel_post_text(
-    product: ProductSnapshot,
-) -> str:
-    public_url = get_product_url(product)
-
-    rating = getattr(
-        product,
-        "rating",
-        None,
-    )
-
-    reviews_count = getattr(
-        product,
-        "reviews_count",
-        None,
-    )
-
-    seller = getattr(
-        product,
-        "seller",
-        None,
-    )
-
-    ships_from = getattr(
-        product,
-        "ships_from",
-        None,
-    )
-
-    rating_text = ""
-
-    if rating is not None:
-        rating_text = (
-            f"\n⭐ {reviews_count or 0} Recensioni: "
-            f"{rating} / 5.0"
-        )
-
-    seller_text = ""
-
-    if seller and ships_from:
-        seller_text = (
-            f"\n📦 Venduto da {escape(seller)} "
-            f"e spedito da {escape(ships_from)}"
-        )
-
-    return (
-        "🧪 <b>POST DEMO AmazonDealsBot</b>\n\n"
-        f"👀 <b>{escape(product.title)}</b>\n\n"
-        f"💰 A soli "
-        f"<b>{format_money(product.current_price)}</b>"
-        f" invece di "
-        f"{format_money(product.original_price)} "
-        f"(-{product.discount_percentage or 0}%)\n\n"
-        f"🔎 {public_url}"
-        f"{rating_text}"
-        f"{seller_text}\n\n"
-        "⚠️ Dati demo: provider Amazon "
-        "reale non ancora collegato."
+        "🧪 <b>ANTEPRIMA TEMPLATE</b>\n"
+        "⚠️ I dati prodotto sono ancora "
+        "MOCK.\n\n"
+        "────────────────\n\n"
+        f"{render_post(product)}"
     )
 
 
@@ -312,17 +256,19 @@ async def select_post_channel(
         await query.message.edit_text(
             "🔗 <b>Inserisci prodotto</b>\n\n"
             f"Canale: "
-            f"<b>{escape(channel.title)}</b>\n\n"
+            f"<b>{escape(channel.title)}</b>"
+            "\n\n"
             "Puoi inviare:\n\n"
-            "• un normale URL Amazon.it\n"
-            "• un link corto amzn.to\n"
+            "• URL Amazon.it\n"
+            "• link corto amzn.to\n"
             "• direttamente l'ASIN\n\n"
-            "Esempio:\n"
-            "<code>"
-            "https://www.amazon.it/dp/"
-            "B00KL8SM92"
-            "</code>",
-            reply_markup=product_input_keyboard(),
+            "Se inserisci un link "
+            "<b>amzn.to</b>, il bot "
+            "manterrà quel link corto "
+            "nel post.",
+            reply_markup=(
+                product_input_keyboard()
+            ),
         )
 
     await query.answer()
@@ -368,13 +314,20 @@ async def receive_product(
     if not message.text:
         await message.answer(
             "❌ Invia un URL Amazon.it, "
-            "un link amzn.to oppure un ASIN.",
-            reply_markup=product_input_keyboard(),
+            "un link amzn.to oppure "
+            "un ASIN.",
+            reply_markup=(
+                product_input_keyboard()
+            ),
         )
         return
 
+    submitted_value = (
+        message.text.strip()
+    )
+
     asin = await extract_asin(
-        message.text
+        submitted_value
     )
 
     if asin is None:
@@ -384,15 +337,30 @@ async def receive_product(
             "Puoi utilizzare:\n"
             "• link Amazon.it\n"
             "• link amzn.to\n"
-            "• ASIN di 10 caratteri\n\n"
-            "Puoi anche tornare indietro.",
-            reply_markup=product_input_keyboard(),
+            "• ASIN di 10 caratteri",
+            reply_markup=(
+                product_input_keyboard()
+            ),
         )
         return
 
-    product = await amazon_provider.get_product(
-        asin
+    product = (
+        await amazon_provider.get_product(
+            asin
+        )
     )
+
+    # Se l'utente ha inserito un vero
+    # amzn.to, conserviamo proprio quello.
+    if is_amzn_short_url(
+        submitted_value
+    ):
+        product = product.model_copy(
+            update={
+                "affiliate_short_url":
+                    submitted_value
+            }
+        )
 
     await state.update_data(
         product=product.model_dump(
@@ -402,8 +370,13 @@ async def receive_product(
 
     await message.answer(
         product_preview(product),
-        reply_markup=preview_keyboard(
-            product
+        reply_markup=(
+            preview_keyboard(product)
+        ),
+        link_preview_options=(
+            LinkPreviewOptions(
+                is_disabled=True
+            )
         ),
     )
 
@@ -452,12 +425,17 @@ async def retry_product(
 
     if query.message is not None:
         await query.message.edit_text(
-            "🔗 <b>Inserisci prodotto</b>\n\n"
+            "🔗 <b>Inserisci prodotto</b>"
+            "\n\n"
             f"Canale: "
-            f"<b>{escape(channel.title)}</b>\n\n"
-            "Incolla un nuovo URL Amazon.it, "
-            "un link amzn.to oppure l'ASIN.",
-            reply_markup=product_input_keyboard(),
+            f"<b>{escape(channel.title)}</b>"
+            "\n\n"
+            "Incolla un nuovo URL "
+            "Amazon.it, un link amzn.to "
+            "oppure l'ASIN.",
+            reply_markup=(
+                product_input_keyboard()
+            ),
         )
 
     await query.answer()
@@ -508,11 +486,13 @@ async def publish_post(
         )
         return
 
-    product = ProductSnapshot.model_validate(
-        product_data
+    product = (
+        ProductSnapshot.model_validate(
+            product_data
+        )
     )
 
-    public_url = get_product_url(
+    public_url = get_public_url(
         product
     )
 
@@ -527,13 +507,29 @@ async def publish_post(
         ]
     )
 
+    post_text = (
+        render_post(product)
+        + "\n\n"
+        "⚠️ <i>Dati demo: provider "
+        "Amazon reale non ancora "
+        "collegato.</i>"
+    )
+
     try:
         await bot.send_message(
-            chat_id=channel.telegram_chat_id,
-            text=channel_post_text(
-                product
+            chat_id=(
+                channel.telegram_chat_id
             ),
+            text=post_text,
             reply_markup=keyboard,
+
+            # Niente riquadro/anteprima
+            # automatica del link Amazon.
+            link_preview_options=(
+                LinkPreviewOptions(
+                    is_disabled=True
+                )
+            ),
         )
 
     except TelegramAPIError:
@@ -547,23 +543,31 @@ async def publish_post(
 
     if query.message is not None:
         await query.message.edit_text(
-            "✅ <b>Post pubblicato!</b>\n\n"
+            "✅ <b>Post pubblicato!</b>"
+            "\n\n"
             f"📢 Canale: "
             f"<b>{escape(channel.title)}</b>",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🏠 Menu principale",
-                            callback_data="menu:home",
-                        )
+            reply_markup=(
+                InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=(
+                                    "🏠 Menu "
+                                    "principale"
+                                ),
+                                callback_data=(
+                                    "menu:home"
+                                ),
+                            )
+                        ]
                     ]
-                ]
+                )
             ),
         )
 
     await query.answer(
-        "Pubblicato!",
+        "Pubblicato!"
     )
 
 
@@ -579,15 +583,22 @@ async def cancel_post(
     if query.message is not None:
         await query.message.edit_text(
             "❌ Creazione post annullata.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🏠 Menu principale",
-                            callback_data="menu:home",
-                        )
+            reply_markup=(
+                InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=(
+                                    "🏠 Menu "
+                                    "principale"
+                                ),
+                                callback_data=(
+                                    "menu:home"
+                                ),
+                            )
+                        ]
                     ]
-                ]
+                )
             ),
         )
 
