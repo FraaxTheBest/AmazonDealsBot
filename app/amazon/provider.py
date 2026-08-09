@@ -5,6 +5,13 @@ from app.amazon.models import ProductSnapshot
 from app.config import get_settings
 
 
+DEMO_IMAGE_URL = (
+    "https://placehold.co/"
+    "1200x1200/png"
+    "?text=AmazonDealsBot+DEMO"
+)
+
+
 class AmazonProvider(Protocol):
     async def get_product(
         self,
@@ -27,16 +34,35 @@ class MockAmazonProvider:
 
         return ProductSnapshot(
             asin=asin,
-            title=f"Prodotto Amazon di test ({asin})",
+            title=(
+                "Prodotto Amazon di test "
+                f"({asin})"
+            ),
             brand="AmazonDealsBot Demo",
-            detail_url=f"https://www.amazon.it/dp/{asin}",
+            detail_url=(
+                f"https://www.amazon.it/"
+                f"dp/{asin}"
+            ),
             affiliate_url=affiliate_url,
             affiliate_short_url=None,
-            image_url=None,
-            current_price=Decimal("79.99"),
-            original_price=Decimal("99.99"),
-            discount_percentage=Decimal("20"),
-            rating=Decimal("4.7"),
+
+            # FOTO DEMO.
+            # Il provider Amazon reale
+            # metterà qui la foto vera.
+            image_url=DEMO_IMAGE_URL,
+
+            current_price=Decimal(
+                "79.99"
+            ),
+            original_price=Decimal(
+                "99.99"
+            ),
+            discount_percentage=Decimal(
+                "20"
+            ),
+            rating=Decimal(
+                "4.7"
+            ),
             reviews_count=66,
             availability="Disponibile",
             seller="AmazonDealsBot Demo",
