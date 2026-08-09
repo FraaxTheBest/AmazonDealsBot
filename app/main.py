@@ -2,16 +2,16 @@ import asyncio
 import logging
 import sys
 
-from aiogram import Bot, CallbackQuery, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.types import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
-
 from app.config import get_settings
 from app.database import init_db, register_user
 
