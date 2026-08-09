@@ -2,6 +2,7 @@ from html import escape
 from urllib.parse import urlparse
 
 from aiogram import Bot, F, Router
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import (
@@ -12,6 +13,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     Message,
 )
 
@@ -55,6 +57,36 @@ class CreatePostStates(
     StatesGroup
 ):
     waiting_product = State()
+
+    waiting_custom_image = State()
+
+
+async def get_state_product(
+    state: FSMContext,
+) -> ProductSnapshot | None:
+    data = await state.get_data()
+
+    product_data = data.get(
+        "product"
+    )
+
+    if product_data is None:
+        return None
+
+    return ProductSnapshot.model_validate(
+        product_data
+    )
+
+
+async def save_state_product(
+    state: FSMContext,
+    product: ProductSnapshot,
+) -> None:
+    await state.update_data(
+        product=product.model_dump(
+            mode="json"
+        )
+    )
 
 
 async def render_saved_template(
@@ -113,6 +145,51 @@ def is_amzn_short_url(
     )
 
 
+def get_available_images(
+    product: ProductSnapshot,
+) -> list[str]:
+    """
+    Restituisce:
+    PRIMARY + VARIANTI.
+
+    Rimuove eventuali duplicati.
+    """
+
+    images: list[str] = []
+
+    candidates = [
+        product.primary_image_url,
+        *product.variant_image_urls,
+    ]
+
+    for image in candidates:
+        if (
+            image
+            and image not in images
+        ):
+            images.append(image)
+
+    return images
+
+
+def get_current_image_index(
+    product: ProductSnapshot,
+) -> int:
+    images = get_available_images(
+        product
+    )
+
+    if (
+        product.image_url
+        and product.image_url in images
+    ):
+        return images.index(
+            product.image_url
+        )
+
+    return 0
+
+
 def channel_selection_keyboard(
     channels: list[Channel],
 ) -> InlineKeyboardMarkup:
@@ -137,12 +214,8 @@ def channel_selection_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text=(
-                    "🏠 Menu principale"
-                ),
-                callback_data=(
-                    "menu:home"
-                ),
+                text="🏠 Menu principale",
+                callback_data="menu:home",
             )
         ]
     )
@@ -177,18 +250,22 @@ def product_input_keyboard(
 def preview_keyboard(
     product: ProductSnapshot,
 ) -> InlineKeyboardMarkup:
-    public_url = get_public_url(
-        product
-    )
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=(
-                        "Vedi offerta 👀"
+                    text="Vedi offerta 👀",
+                    url=get_public_url(
+                        product
                     ),
-                    url=public_url,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🖼 Cambia immagine",
+                    callback_data=(
+                        "post:image_menu"
+                    ),
                 )
             ],
             [
@@ -207,9 +284,7 @@ def preview_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text=(
-                        "⬅️ Cambia prodotto"
-                    ),
+                    text="⬅️ Cambia prodotto",
                     callback_data=(
                         "post:retry_product"
                     ),
@@ -232,9 +307,7 @@ def published_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=(
-                        "Vedi offerta 👀"
-                    ),
+                    text="Vedi offerta 👀",
                     url=get_public_url(
                         product
                     ),
@@ -250,14 +323,84 @@ def home_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=(
-                        "🏠 Menu principale"
+                    text="🏠 Menu principale",
+                    callback_data="menu:home",
+                )
+            ]
+        ]
+    )
+
+
+def image_picker_keyboard(
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=(
+                        "post:image_prev"
                     ),
+                ),
+                InlineKeyboardButton(
+                    text="✅ Usa questa",
+                    callback_data=(
+                        "post:image_use"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=(
+                        "post:image_next"
+                    ),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "📤 Carica immagine tua"
+                    ),
+                    callback_data=(
+                        "post:image_custom"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "↩️ Torna all'anteprima"
+                    ),
+                    callback_data=(
+                        "post:image_back"
+                    ),
+                )
+            ],
+        ]
+    )
+
+
+def custom_image_keyboard(
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "↩️ Torna all'anteprima"
+                    ),
+                    callback_data=(
+                        "post:image_back"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏠 Home",
                     callback_data=(
                         "menu:home"
                     ),
                 )
-            ]
+            ],
         ]
     )
 
@@ -266,10 +409,142 @@ def product_preview_text(
     rendered_post: str,
 ) -> str:
     return (
-        "🧪 <b>ANTEPRIMA</b>\n"
-        "⚠️ Dati prodotto MOCK.\n\n"
+        "🧪 <b>ANTEPRIMA POST</b>\n"
+        "⚠️ Dati prodotto ancora MOCK."
+        "\n\n"
         "────────────────\n\n"
         f"{rendered_post}"
+    )
+
+
+def image_picker_caption(
+    product: ProductSnapshot,
+    index: int,
+) -> str:
+    images = get_available_images(
+        product
+    )
+
+    total = len(images)
+
+    if total == 0:
+        return (
+            "🖼 <b>Immagini</b>\n\n"
+            "Nessuna immagine disponibile."
+        )
+
+    selected_image = images[
+        index
+    ]
+
+    if (
+        selected_image
+        == product.primary_image_url
+    ):
+        image_type = (
+            "⭐ Immagine principale "
+            "(PRIMARY)"
+        )
+
+    else:
+        image_type = (
+            "🖼 Immagine alternativa"
+        )
+
+    return (
+        "🖼 <b>Scegli immagine</b>\n\n"
+        f"{image_type}\n"
+        f"Immagine {index + 1} "
+        f"di {total}\n\n"
+        "🧪 Per ora la galleria è DEMO.\n"
+        "Con il provider Amazon reale "
+        "la prima sarà la foto PRIMARY "
+        "del prodotto."
+    )
+
+
+async def delete_message_safely(
+    message: Message | None,
+) -> None:
+    if message is None:
+        return
+
+    try:
+        await message.delete()
+
+    except TelegramAPIError:
+        pass
+
+
+async def send_preview(
+    bot: Bot,
+    chat_id: int,
+    product: ProductSnapshot,
+) -> None:
+    rendered_post = (
+        await render_saved_template(
+            product
+        )
+    )
+
+    preview_text = (
+        product_preview_text(
+            rendered_post
+        )
+    )
+
+    await send_product_post(
+        bot=bot,
+        chat_id=chat_id,
+        product=product,
+        text=preview_text,
+        reply_markup=(
+            preview_keyboard(
+                product
+            )
+        ),
+    )
+
+
+async def send_image_picker(
+    bot: Bot,
+    chat_id: int,
+    product: ProductSnapshot,
+    index: int,
+) -> None:
+    images = get_available_images(
+        product
+    )
+
+    if not images:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "🖼 <b>Nessuna immagine "
+                "disponibile.</b>\n\n"
+                "Puoi comunque caricare "
+                "una tua immagine."
+            ),
+            reply_markup=(
+                custom_image_keyboard()
+            ),
+        )
+        return
+
+    index = index % len(images)
+
+    await bot.send_photo(
+        chat_id=chat_id,
+        photo=images[index],
+        caption=(
+            image_picker_caption(
+                product,
+                index,
+            )
+        ),
+        reply_markup=(
+            image_picker_keyboard()
+        ),
     )
 
 
@@ -346,8 +621,7 @@ async def select_post_channel(
     )
 
     await state.set_state(
-        CreatePostStates
-        .waiting_product
+        CreatePostStates.waiting_product
     )
 
     if query.message is not None:
@@ -363,8 +637,7 @@ async def select_post_channel(
             "• direttamente l'ASIN\n\n"
             "Se inserisci un link "
             "<b>amzn.to</b>, il bot "
-            "manterrà quel link corto "
-            "nel post.",
+            "manterrà quel link corto.",
             reply_markup=(
                 product_input_keyboard()
             ),
@@ -374,9 +647,7 @@ async def select_post_channel(
 
 
 @router.callback_query(
-    F.data == (
-        "post:back_channels"
-    )
+    F.data == "post:back_channels"
 )
 async def back_to_channel_selection(
     query: CallbackQuery,
@@ -406,8 +677,7 @@ async def back_to_channel_selection(
 
 
 @router.message(
-    CreatePostStates
-    .waiting_product
+    CreatePostStates.waiting_product
 )
 async def receive_product(
     message: Message,
@@ -416,9 +686,9 @@ async def receive_product(
 ) -> None:
     if not message.text:
         await message.answer(
-            "❌ Invia un URL "
-            "Amazon.it, un link "
-            "amzn.to oppure un ASIN.",
+            "❌ Invia un URL Amazon.it, "
+            "un link amzn.to oppure "
+            "un ASIN.",
             reply_markup=(
                 product_input_keyboard()
             ),
@@ -448,8 +718,7 @@ async def receive_product(
         return
 
     product = (
-        await amazon_provider
-        .get_product(
+        await amazon_provider.get_product(
             asin
         )
     )
@@ -457,60 +726,30 @@ async def receive_product(
     if is_amzn_short_url(
         submitted_value
     ):
-        product = (
-            product.model_copy(
-                update={
-                    "affiliate_short_url":
-                        submitted_value
-                }
-            )
+        product = product.model_copy(
+            update={
+                "affiliate_short_url":
+                    submitted_value
+            }
         )
 
-    await state.update_data(
-        product=(
-            product.model_dump(
-                mode="json"
-            )
-        )
+    await save_state_product(
+        state,
+        product,
     )
 
-    rendered_post = (
-        await render_saved_template(
-            product
-        )
+    # Finito l'inserimento prodotto.
+    # Manteniamo i dati FSM ma non
+    # aspettiamo più un nuovo link.
+    await state.set_state(
+        None
     )
-
-    preview_text = (
-        product_preview_text(
-            rendered_post
-        )
-    )
-
-    if (
-        product.image_url
-        and len(preview_text)
-        > PHOTO_CAPTION_LIMIT
-    ):
-        await message.answer(
-            "❌ Il template è troppo "
-            "lungo per essere usato "
-            "come caption della foto.\n\n"
-            "Accorcialo dal menu "
-            "📝 Template."
-        )
-        return
 
     try:
-        await send_product_post(
+        await send_preview(
             bot=bot,
             chat_id=message.chat.id,
             product=product,
-            text=preview_text,
-            reply_markup=(
-                preview_keyboard(
-                    product
-                )
-            ),
         )
 
     except TelegramAPIError:
@@ -521,13 +760,419 @@ async def receive_product(
 
 
 @router.callback_query(
-    F.data == (
-        "post:retry_product"
+    F.data == "post:image_menu"
+)
+async def open_image_menu(
+    query: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    product = (
+        await get_state_product(
+            state
+        )
     )
+
+    if product is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+        return
+
+    images = get_available_images(
+        product
+    )
+
+    if not images:
+        await delete_message_safely(
+            query.message
+        )
+
+        await state.set_state(
+            CreatePostStates
+            .waiting_custom_image
+        )
+
+        await bot.send_message(
+            chat_id=query.from_user.id,
+            text=(
+                "📤 <b>Carica "
+                "un'immagine</b>\n\n"
+                "Inviami la foto che vuoi "
+                "usare per questo post."
+            ),
+            reply_markup=(
+                custom_image_keyboard()
+            ),
+        )
+
+        await query.answer()
+        return
+
+    index = get_current_image_index(
+        product
+    )
+
+    await state.update_data(
+        image_index=index
+    )
+
+    await delete_message_safely(
+        query.message
+    )
+
+    try:
+        await send_image_picker(
+            bot=bot,
+            chat_id=query.from_user.id,
+            product=product,
+            index=index,
+        )
+
+    except TelegramAPIError:
+        await bot.send_message(
+            chat_id=query.from_user.id,
+            text=(
+                "❌ Non riesco a caricare "
+                "la galleria demo.\n\n"
+                "Puoi comunque caricare "
+                "una tua immagine."
+            ),
+            reply_markup=(
+                custom_image_keyboard()
+            ),
+        )
+
+    await query.answer()
+
+
+@router.callback_query(
+    F.data == "post:image_prev"
+)
+@router.callback_query(
+    F.data == "post:image_next"
+)
+async def browse_images(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    product = (
+        await get_state_product(
+            state
+        )
+    )
+
+    if product is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+        return
+
+    images = get_available_images(
+        product
+    )
+
+    if not images:
+        await query.answer(
+            "Nessuna immagine.",
+            show_alert=True,
+        )
+        return
+
+    data = await state.get_data()
+
+    index = int(
+        data.get(
+            "image_index",
+            0,
+        )
+    )
+
+    if (
+        query.data
+        == "post:image_next"
+    ):
+        index = (
+            index + 1
+        ) % len(images)
+
+    else:
+        index = (
+            index - 1
+        ) % len(images)
+
+    await state.update_data(
+        image_index=index
+    )
+
+    if query.message is not None:
+        try:
+            await query.message.edit_media(
+                media=InputMediaPhoto(
+                    media=images[index],
+                    caption=(
+                        image_picker_caption(
+                            product,
+                            index,
+                        )
+                    ),
+                    parse_mode=(
+                        ParseMode.HTML
+                    ),
+                ),
+                reply_markup=(
+                    image_picker_keyboard()
+                ),
+            )
+
+        except TelegramAPIError:
+            await query.answer(
+                "❌ Impossibile caricare "
+                "questa immagine.",
+                show_alert=True,
+            )
+            return
+
+    await query.answer()
+
+
+@router.callback_query(
+    F.data == "post:image_use"
+)
+async def use_selected_image(
+    query: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    product = (
+        await get_state_product(
+            state
+        )
+    )
+
+    if product is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+        return
+
+    images = get_available_images(
+        product
+    )
+
+    if not images:
+        await query.answer(
+            "Nessuna immagine.",
+            show_alert=True,
+        )
+        return
+
+    data = await state.get_data()
+
+    index = int(
+        data.get(
+            "image_index",
+            0,
+        )
+    )
+
+    index = index % len(images)
+
+    product = product.model_copy(
+        update={
+            "image_url":
+                images[index]
+        }
+    )
+
+    await save_state_product(
+        state,
+        product,
+    )
+
+    await state.set_state(
+        None
+    )
+
+    await delete_message_safely(
+        query.message
+    )
+
+    await send_preview(
+        bot=bot,
+        chat_id=query.from_user.id,
+        product=product,
+    )
+
+    await query.answer(
+        "Immagine selezionata!"
+    )
+
+
+@router.callback_query(
+    F.data == "post:image_custom"
+)
+async def custom_image_start(
+    query: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    product = (
+        await get_state_product(
+            state
+        )
+    )
+
+    if product is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+        return
+
+    await state.set_state(
+        CreatePostStates
+        .waiting_custom_image
+    )
+
+    await delete_message_safely(
+        query.message
+    )
+
+    await bot.send_message(
+        chat_id=query.from_user.id,
+        text=(
+            "📤 <b>Carica immagine "
+            "personalizzata</b>\n\n"
+            "Mandami adesso una foto.\n\n"
+            "Verrà usata solamente per "
+            "questo post."
+        ),
+        reply_markup=(
+            custom_image_keyboard()
+        ),
+    )
+
+    await query.answer()
+
+
+@router.message(
+    CreatePostStates
+    .waiting_custom_image
+)
+async def receive_custom_image(
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    if not message.photo:
+        await message.answer(
+            "❌ Devi inviarmi una "
+            "foto vera.\n\n"
+            "Usa 📎 e scegli Foto.",
+            reply_markup=(
+                custom_image_keyboard()
+            ),
+        )
+        return
+
+    product = (
+        await get_state_product(
+            state
+        )
+    )
+
+    if product is None:
+        await state.clear()
+
+        await message.answer(
+            "❌ Sessione scaduta.\n"
+            "Ricomincia da /start."
+        )
+        return
+
+    # Prendiamo la versione più grande
+    # ricevuta da Telegram.
+    telegram_photo = (
+        message.photo[-1]
+    )
+
+    product = product.model_copy(
+        update={
+            "image_url":
+                telegram_photo.file_id
+        }
+    )
+
+    await save_state_product(
+        state,
+        product,
+    )
+
+    await state.set_state(
+        None
+    )
+
+    await message.answer(
+        "✅ Immagine personalizzata "
+        "selezionata."
+    )
+
+    await send_preview(
+        bot=bot,
+        chat_id=message.chat.id,
+        product=product,
+    )
+
+
+@router.callback_query(
+    F.data == "post:image_back"
+)
+async def back_from_images(
+    query: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    product = (
+        await get_state_product(
+            state
+        )
+    )
+
+    if product is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+        return
+
+    await state.set_state(
+        None
+    )
+
+    await delete_message_safely(
+        query.message
+    )
+
+    await send_preview(
+        bot=bot,
+        chat_id=query.from_user.id,
+        product=product,
+    )
+
+    await query.answer()
+
+
+@router.callback_query(
+    F.data == "post:retry_product"
 )
 async def retry_product(
     query: CallbackQuery,
     state: FSMContext,
+    bot: Bot,
 ) -> None:
     data = await state.get_data()
 
@@ -557,7 +1202,8 @@ async def retry_product(
         return
 
     await state.update_data(
-        product=None
+        product=None,
+        image_index=0,
     )
 
     await state.set_state(
@@ -565,33 +1211,26 @@ async def retry_product(
         .waiting_product
     )
 
-    if query.message is not None:
-        # L'anteprima ora può essere
-        # una FOTO. edit_text non
-        # funzionerebbe su un media.
-        try:
-            await query.message.delete()
+    await delete_message_safely(
+        query.message
+    )
 
-        except TelegramAPIError:
-            pass
-
-        await query.bot.send_message(
-            chat_id=query.from_user.id,
-            text=(
-                "🔗 <b>Inserisci "
-                "prodotto</b>\n\n"
-                f"Canale: "
-                f"<b>"
-                f"{escape(channel.title)}"
-                f"</b>\n\n"
-                "Incolla un nuovo URL "
-                "Amazon.it, un link "
-                "amzn.to oppure l'ASIN."
-            ),
-            reply_markup=(
-                product_input_keyboard()
-            ),
-        )
+    await bot.send_message(
+        chat_id=query.from_user.id,
+        text=(
+            "🔗 <b>Inserisci "
+            "prodotto</b>\n\n"
+            f"Canale: "
+            f"<b>{escape(channel.title)}</b>"
+            "\n\n"
+            "Incolla un nuovo URL "
+            "Amazon.it, un link amzn.to "
+            "oppure l'ASIN."
+        ),
+        reply_markup=(
+            product_input_keyboard()
+        ),
+    )
 
     await query.answer()
 
@@ -612,13 +1251,15 @@ async def publish_post(
         "channel_id"
     )
 
-    product_data = data.get(
-        "product"
+    product = (
+        await get_state_product(
+            state
+        )
     )
 
     if (
         channel_id is None
-        or product_data is None
+        or product is None
     ):
         await query.answer(
             "Sessione scaduta. "
@@ -641,13 +1282,6 @@ async def publish_post(
         )
         return
 
-    product = (
-        ProductSnapshot
-        .model_validate(
-            product_data
-        )
-    )
-
     rendered_post = (
         await render_saved_template(
             product
@@ -669,8 +1303,8 @@ async def publish_post(
     ):
         await query.answer(
             "Il template è troppo "
-            "lungo per una foto. "
-            "Accorcialo da Template.",
+            "lungo per essere usato "
+            "come caption della foto.",
             show_alert=True,
         )
         return
@@ -699,30 +1333,22 @@ async def publish_post(
 
     await state.clear()
 
-    if query.message is not None:
-        # Anche qui il messaggio può
-        # essere una foto, quindi
-        # cancelliamo l'anteprima.
-        try:
-            await query.message.delete()
+    await delete_message_safely(
+        query.message
+    )
 
-        except TelegramAPIError:
-            pass
-
-        await bot.send_message(
-            chat_id=query.from_user.id,
-            text=(
-                "✅ <b>Post "
-                "pubblicato!</b>\n\n"
-                f"📢 Canale: "
-                f"<b>"
-                f"{escape(channel.title)}"
-                f"</b>"
-            ),
-            reply_markup=(
-                home_keyboard()
-            ),
-        )
+    await bot.send_message(
+        chat_id=query.from_user.id,
+        text=(
+            "✅ <b>Post "
+            "pubblicato!</b>\n\n"
+            f"📢 Canale: "
+            f"<b>{escape(channel.title)}</b>"
+        ),
+        reply_markup=(
+            home_keyboard()
+        ),
+    )
 
     await query.answer(
         "Pubblicato!"
@@ -739,12 +1365,9 @@ async def cancel_post(
 ) -> None:
     await state.clear()
 
-    if query.message is not None:
-        try:
-            await query.message.delete()
-
-        except TelegramAPIError:
-            pass
+    await delete_message_safely(
+        query.message
+    )
 
     await bot.send_message(
         chat_id=query.from_user.id,
