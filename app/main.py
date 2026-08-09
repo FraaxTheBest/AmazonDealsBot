@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -78,7 +79,11 @@ def main_menu_text(
 @router.message(CommandStart())
 async def start_handler(
     message: Message,
+    state: FSMContext,
 ) -> None:
+    # /start annulla qualsiasi procedura aperta.
+    await state.clear()
+
     if message.from_user is None:
         return
 
@@ -110,9 +115,16 @@ async def start_handler(
     )
 
 
+@router.callback_query(
+    F.data == "menu:home"
+)
 async def back_home(
     query: CallbackQuery,
+    state: FSMContext,
 ) -> None:
+    # Anche Home annulla eventuali FSM attivi.
+    await state.clear()
+
     if query.message is not None:
         await query.message.edit_text(
             main_menu_text(
@@ -124,9 +136,6 @@ async def back_home(
     await query.answer()
 
 
-@router.callback_query(
-    F.data == "menu:create_post"
-)
 @router.callback_query(
     F.data == "menu:autopost"
 )
@@ -182,16 +191,18 @@ async def main() -> None:
 
     dispatcher = Dispatcher()
 
+    # Il router MAIN va per primo:
+    # così /start funziona anche quando sei dentro una FSM.
+    dispatcher.include_router(
+        router
+    )
+
     dispatcher.include_router(
         channels_router
     )
 
     dispatcher.include_router(
         posts_router
-    )
-    
-    dispatcher.include_router(
-        router
     )
 
     await bot.delete_webhook(
