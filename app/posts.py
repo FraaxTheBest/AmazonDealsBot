@@ -33,6 +33,10 @@ from app.database import (
     get_channel,
     list_channels,
 )
+from app.deal_engine import (
+    deal_admin_text,
+    evaluate_deal,
+)
 from app.publisher import (
     PHOTO_CAPTION_LIMIT,
     send_product_post,
@@ -520,11 +524,13 @@ async def send_preview(
     """
     Anteprima amministratore.
 
-    Include anche lo stato
-    dell'Affiliate Engine.
+    Mostra:
+    - post finale
+    - Affiliate Engine
+    - Deal Engine
 
-    Lo stato affiliate NON finirà
-    nel post pubblico.
+    Le informazioni tecniche
+    NON finiscono nel canale.
     """
 
     rendered_post = (
@@ -534,6 +540,10 @@ async def send_preview(
     )
 
     data = await state.get_data()
+
+    # =====================================================
+    # AFFILIATE ENGINE
+    # =====================================================
 
     affiliate_status = data.get(
         "affiliate_status"
@@ -545,6 +555,43 @@ async def send_preview(
             "ℹ️ Stato non disponibile."
         )
 
+    # =====================================================
+    # DEAL ENGINE
+    # =====================================================
+
+    deal_evaluation = (
+        evaluate_deal(
+            product
+        )
+    )
+
+    deal_status = (
+        deal_admin_text(
+            deal_evaluation
+        )
+    )
+
+    # Salviamo anche il risultato
+    # nell'FSM.
+    #
+    # Ci tornerà utile nelle
+    # prossime fasi dell'Autoposting.
+    await state.update_data(
+        deal_score=(
+            deal_evaluation.score
+        ),
+        deal_is_valid=(
+            deal_evaluation.is_deal
+        ),
+        deal_verdict=(
+            deal_evaluation.verdict
+        ),
+    )
+
+    # =====================================================
+    # ANTEPRIMA ADMIN
+    # =====================================================
+
     preview_text = (
         product_preview_text(
             rendered_post
@@ -552,6 +599,9 @@ async def send_preview(
         + "\n\n"
         "────────────────\n\n"
         + affiliate_status
+        + "\n\n"
+        "────────────────\n\n"
+        + deal_status
     )
 
     await send_product_post(
@@ -565,7 +615,6 @@ async def send_preview(
             )
         ),
     )
-
 
 async def send_image_picker(
     bot: Bot,
