@@ -22,6 +22,9 @@ from aiogram.types import (
     Message,
 )
 
+from app.autoposting import (
+    router as autoposting_router,
+)
 from app.channels import (
     router as channels_router,
 )
@@ -195,9 +198,6 @@ async def back_home(
 
 
 @router.callback_query(
-    F.data == "menu:autopost"
-)
-@router.callback_query(
     F.data == "menu:stats"
 )
 @router.callback_query(
@@ -207,9 +207,6 @@ async def future_sections(
     query: CallbackQuery,
 ) -> None:
     names = {
-        "menu:autopost":
-            "🤖 Autoposting",
-
         "menu:stats":
             "📊 Statistiche",
 
@@ -254,10 +251,16 @@ async def main() -> None:
 
     dispatcher = Dispatcher()
 
+    #
+    # MAIN
+    #
     dispatcher.include_router(
         router
     )
 
+    #
+    # FUNZIONI
+    #
     dispatcher.include_router(
         channels_router
     )
@@ -268,6 +271,10 @@ async def main() -> None:
 
     dispatcher.include_router(
         scheduling_router
+    )
+
+    dispatcher.include_router(
+        autoposting_router
     )
 
     dispatcher.include_router(
