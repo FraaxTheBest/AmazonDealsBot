@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -17,18 +18,22 @@ class ProductSnapshot(BaseModel):
     brand: str | None = None
 
     # Categoria interna del bot.
-    #
-    # Non è legata direttamente
-    # alla tassonomia Amazon:
-    # in futuro il provider farà
-    # il mapping.
     category_key: str | None = None
 
-    # Immagine attualmente selezionata.
+    # Metadato opzionale del provider.
+    # Valori supportati dalla Fase 11:
+    # lightning, coupon, lowest,
+    # warehouse, normal, error.
     #
-    # Può essere:
-    # - URL
-    # - Telegram file_id
+    # Se il provider non lo fornisce,
+    # il prodotto viene trattato come normal.
+    offer_type: str | None = None
+
+    # Timestamp opzionale del provider.
+    # Utilizzato dall'ordinamento "più recente".
+    source_updated_at: datetime | None = None
+
+    # Immagine attualmente selezionata.
     image_url: str | None = None
 
     primary_image_url: str | None = None

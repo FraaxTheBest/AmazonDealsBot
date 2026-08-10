@@ -1,280 +1,307 @@
 import asyncio
 import logging
 from datetime import timezone
+from zoneinfo import ZoneInfo
 
-from apscheduler.jobstores.base import (
-    JobLookupError,
-)
-from apscheduler.schedulers import (
-    SchedulerNotRunningError,
-)
-from apscheduler.schedulers.asyncio import (
-    AsyncIOScheduler,
-)
+from aiogram import Bot
+from apscheduler.jobstores.base import JobLookupError
+from apscheduler.schedulers import SchedulerNotRunningError
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
-from app.autopost_pipeline import (
-    run_channel_autopost_pipeline,
+from app.autopost_advanced_store import (
+    MODE_AUTOMATIC,
+    PUBLISH_INTERVAL,
+    event_status,
+    get_or_create_advanced_config,
+    get_publish_slots,
+    recover_stale_publishing_for_channel,
 )
-from app.autopost_queue_store import (
-    enqueue_autopost_candidates,
+from app.autopost_auto_service import (
+    automatic_publish_once,
+    run_advanced_scan,
 )
 from app.autopost_runtime_store import (
     get_or_create_runtime_config,
     list_enabled_autopost_channels,
 )
-from app.autopost_store import (
-    get_or_create_autopost_config,
-)
-from app.autoposting import (
-    build_demo_products,
-)
+from app.autopost_store import get_or_create_autopost_config
+from app.config import get_settings
 
 
-_scheduler: (
-    AsyncIOScheduler | None
-) = None
+_scheduler: AsyncIOScheduler | None = None
+_bot: Bot | None = None
+_job_signatures: dict[int, tuple] = {}
 
 
-# =========================================================
-# JOB ID
-# =========================================================
+def scan_job_id(channel_id: int) -> str:
+    return f"autopost_scan_{channel_id}"
 
 
-def autopost_job_id(
-    channel_id: int,
-) -> str:
+def publish_job_id(channel_id: int) -> str:
+    return f"autopost_publish_{channel_id}"
+
+
+def slot_job_id(channel_id: int, index: int) -> str:
+    return f"autopost_slot_{channel_id}_{index}"
+
+
+def _channel_job_prefixes(channel_id: int) -> tuple[str, ...]:
     return (
-        f"autopost_scan_{channel_id}"
+        scan_job_id(channel_id),
+        publish_job_id(channel_id),
+        f"autopost_slot_{channel_id}_",
     )
 
 
-# =========================================================
-# SINGOLA SCANSIONE
-# =========================================================
+def _remove_channel_jobs(channel_id: int) -> None:
+    if _scheduler is None:
+        return
+
+    prefixes = _channel_job_prefixes(channel_id)
+
+    for job in list(_scheduler.get_jobs()):
+        if (
+            job.id == prefixes[0]
+            or job.id == prefixes[1]
+            or job.id.startswith(prefixes[2])
+        ):
+            try:
+                _scheduler.remove_job(job.id)
+            except JobLookupError:
+                pass
+
+    _job_signatures.pop(channel_id, None)
 
 
 async def run_autopost_scan(
     owner_telegram_user_id: int,
     channel_id: int,
 ) -> None:
-    """
-    Esegue una scansione Autopost.
-
-    FASE 10C:
-
-    provider DEMO
-        ↓
-    Pipeline Fase 9
-        ↓
-    limite candidati
-        ↓
-    CODA PERSISTENTE
-
-    NON pubblica ancora nulla.
-    """
-
     try:
-        # =================================================
-        # CONFIG AUTOPOST
-        # =================================================
-
-        autopost_config = (
-            await get_or_create_autopost_config(
-                owner_telegram_user_id,
-                channel_id,
-            )
+        config = await get_or_create_autopost_config(
+            owner_telegram_user_id,
+            channel_id,
         )
-
-        if not autopost_config.is_enabled:
-            logging.info(
-                (
-                    "Autopost scan ignorato | "
-                    "channel=%s | OFF"
-                ),
-                channel_id,
-            )
-
+        if not config.is_enabled:
             return
 
-        runtime = (
-            await get_or_create_runtime_config(
-                owner_telegram_user_id,
-                channel_id,
-            )
+        result = await run_advanced_scan(
+            owner_telegram_user_id,
+            channel_id,
         )
-
-        # =================================================
-        # PROVIDER
-        #
-        # Per ora DEMO.
-        # Verrà sostituito dal provider
-        # Amazon reale quando avremo
-        # Creators API.
-        # =================================================
-
-        products = (
-            build_demo_products()
-        )
-
-        # =================================================
-        # PIPELINE COMPLETA FASE 9
-        # =================================================
-
-        result = (
-            await run_channel_autopost_pipeline(
-                owner_telegram_user_id=(
-                    owner_telegram_user_id
-                ),
-                channel_id=channel_id,
-                products=products,
-            )
-        )
-
-        # =================================================
-        # LIMITE FASE 10A
-        # =================================================
-
-        candidates = (
-            result.final_candidates[
-                :int(
-                    runtime
-                    .max_candidates_per_scan
-                )
-            ]
-        )
-
-        # =================================================
-        # CODA PERSISTENTE FASE 10C
-        # =================================================
-
-        queue_result = (
-            await enqueue_autopost_candidates(
-                owner_telegram_user_id=(
-                    owner_telegram_user_id
-                ),
-                channel_id=channel_id,
-                candidates=candidates,
-                source="demo",
-            )
-        )
-
-        # =================================================
-        # LOG SCANSIONE
-        # =================================================
 
         logging.info(
             (
-                "AUTOPOST SCAN | "
-                "channel=%s | "
-                "source=%s | "
-                "categories=%s | "
-                "filters=%s | "
-                "deals=%s | "
-                "duplicates=%s | "
-                "final=%s | "
-                "selected=%s | "
-                "queue_new=%s | "
-                "queue_refreshed=%s | "
-                "queue_skipped=%s | "
-                "pending_total=%s"
+                "AUTOPOST 11 SCAN | channel=%s | source=%s | "
+                "category=%s | filters=%s | deals=%s | dedupe=%s | "
+                "advanced_in=%s | blacklist_rejected=%s | "
+                "limit_rejected=%s | failed_rejected=%s | "
+                "selected=%s | queue_new=%s | queue_refreshed=%s | "
+                "pending=%s | event=%s"
             ),
             channel_id,
-            result.source_count,
-            result.category_passed_count,
-            result.filter_passed_count,
-            result.deal_valid_count,
-            result.duplicate_count,
-            result.final_count,
-            len(candidates),
-            queue_result.created_count,
-            queue_result.refreshed_count,
-            queue_result.skipped_active_count,
-            queue_result.pending_total,
+            result.pipeline.source_count,
+            result.pipeline.category_passed_count,
+            result.pipeline.filter_passed_count,
+            result.pipeline.deal_valid_count,
+            result.pipeline.duplicate_count,
+            result.ranking.input_count,
+            result.ranking.blacklist_rejected_count,
+            result.ranking.limit_rejected_count,
+            result.ranking.failed_rejected_count,
+            result.selected_count,
+            result.queue.created_count,
+            result.queue.refreshed_count,
+            result.queue.pending_total,
+            result.event_active,
         )
 
-        # =================================================
-        # LOG CANDIDATI
-        # =================================================
-
-        for index, candidate in enumerate(
-            candidates,
+        for index, ranked in enumerate(
+            result.ranking.ranked[: result.selected_count],
             start=1,
         ):
             logging.info(
                 (
-                    "AUTOPOST CANDIDATE | "
-                    "channel=%s | "
-                    "rank=%s | "
-                    "asin=%s | "
-                    "score=%s | "
-                    "title=%s"
+                    "AUTOPOST 11 CANDIDATE | channel=%s | rank=%s | "
+                    "asin=%s | base=%s | bonus=%s | final=%s | type=%s"
                 ),
                 channel_id,
                 index,
-                candidate.product.asin,
-                candidate.evaluation.score,
-                candidate.product.title,
+                ranked.candidate.product.asin,
+                ranked.candidate.evaluation.score,
+                ranked.priority_bonus,
+                ranked.final_score,
+                ranked.offer_type,
             )
 
     except Exception:
         logging.exception(
-            (
-                "Errore Autopost scan "
-                "canale %s."
-            ),
+            "Errore scansione Autopost Fase 11 | channel=%s",
             channel_id,
         )
 
 
-# =========================================================
-# REGISTRA JOB
-# =========================================================
+async def run_autopost_publish(
+    owner_telegram_user_id: int,
+    channel_id: int,
+) -> None:
+    if _bot is None:
+        logging.error("Bot non disponibile per autopubblicazione.")
+        return
+
+    try:
+        outcome = await automatic_publish_once(
+            bot=_bot,
+            owner_telegram_user_id=owner_telegram_user_id,
+            channel_id=channel_id,
+        )
+
+        logging.info(
+            "AUTOPOST 11 PUBLISH | channel=%s | status=%s | candidate=%s",
+            channel_id,
+            outcome.status,
+            outcome.candidate_id,
+        )
+
+    except Exception:
+        logging.exception(
+            "Errore publisher Autopost Fase 11 | channel=%s",
+            channel_id,
+        )
+
+
+async def _channel_signature(
+    owner_telegram_user_id: int,
+    channel_id: int,
+) -> tuple:
+    runtime = await get_or_create_runtime_config(
+        owner_telegram_user_id,
+        channel_id,
+    )
+    advanced = await get_or_create_advanced_config(
+        owner_telegram_user_id,
+        channel_id,
+    )
+    event = event_status(advanced)
+    slots = get_publish_slots(advanced)
+
+    scan_interval = (
+        event.scan_interval_minutes
+        if event.active
+        else int(runtime.scan_interval_minutes)
+    )
+    publish_interval = (
+        event.publish_interval_minutes
+        if event.active
+        else int(runtime.publish_interval_minutes)
+    )
+
+    return (
+        advanced.mode,
+        advanced.publish_strategy,
+        tuple(slots),
+        event.active,
+        event.name,
+        int(scan_interval),
+        int(publish_interval),
+    )
 
 
 async def register_autopost_channel(
     owner_telegram_user_id: int,
     channel_id: int,
-    interval_minutes: int,
     run_now: bool = True,
 ) -> None:
-    """
-    Registra o aggiorna
-    il job periodico.
-    """
-
     if _scheduler is None:
-        raise RuntimeError(
-            "Autopost Scheduler "
-            "non avviato."
-        )
+        return
+
+    runtime = await get_or_create_runtime_config(
+        owner_telegram_user_id,
+        channel_id,
+    )
+    advanced = await get_or_create_advanced_config(
+        owner_telegram_user_id,
+        channel_id,
+    )
+    event = event_status(advanced)
+
+    _remove_channel_jobs(channel_id)
+
+    scan_interval = (
+        int(event.scan_interval_minutes)
+        if event.active and event.scan_interval_minutes is not None
+        else int(runtime.scan_interval_minutes)
+    )
 
     _scheduler.add_job(
         run_autopost_scan,
         trigger="interval",
-        minutes=int(
-            interval_minutes
-        ),
-        args=[
-            owner_telegram_user_id,
-            channel_id,
-        ],
-        id=autopost_job_id(
-            channel_id
-        ),
+        minutes=scan_interval,
+        args=[owner_telegram_user_id, channel_id],
+        id=scan_job_id(channel_id),
         replace_existing=True,
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
     )
 
+    if advanced.mode == MODE_AUTOMATIC:
+        if event.active or advanced.publish_strategy == PUBLISH_INTERVAL:
+            publish_interval = (
+                int(event.publish_interval_minutes)
+                if event.active and event.publish_interval_minutes is not None
+                else int(runtime.publish_interval_minutes)
+            )
+
+            _scheduler.add_job(
+                run_autopost_publish,
+                trigger="interval",
+                minutes=publish_interval,
+                args=[owner_telegram_user_id, channel_id],
+                id=publish_job_id(channel_id),
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=300,
+            )
+
+        else:
+            settings = get_settings()
+            tz = ZoneInfo(settings.app_timezone)
+
+            for index, slot in enumerate(get_publish_slots(advanced)):
+                hour, minute = [int(part) for part in slot.split(":")]
+                _scheduler.add_job(
+                    run_autopost_publish,
+                    trigger=CronTrigger(
+                        hour=hour,
+                        minute=minute,
+                        timezone=tz,
+                    ),
+                    args=[owner_telegram_user_id, channel_id],
+                    id=slot_job_id(channel_id, index),
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                    misfire_grace_time=300,
+                )
+
+    _job_signatures[channel_id] = await _channel_signature(
+        owner_telegram_user_id,
+        channel_id,
+    )
+
     logging.info(
         (
-            "Autopost job attivo | "
-            "channel=%s | "
-            "interval=%s min"
+            "Autopost 11 registrato | channel=%s | mode=%s | "
+            "scan=%s min | publish_strategy=%s | event=%s"
         ),
         channel_id,
-        interval_minutes,
+        advanced.mode,
+        scan_interval,
+        advanced.publish_strategy,
+        event.active,
     )
 
     if run_now:
@@ -284,161 +311,143 @@ async def register_autopost_channel(
         )
 
 
-# =========================================================
-# RIMUOVI JOB
-# =========================================================
-
-
-def remove_autopost_channel(
-    channel_id: int,
-) -> None:
-    if _scheduler is None:
-        return
-
-    try:
-        _scheduler.remove_job(
-            autopost_job_id(
-                channel_id
-            )
-        )
-
-    except JobLookupError:
-        pass
-
-    logging.info(
-        (
-            "Autopost job rimosso | "
-            "channel=%s"
-        ),
-        channel_id,
-    )
-
-
-# =========================================================
-# REFRESH CANALE
-# =========================================================
-
-
 async def refresh_autopost_channel(
     owner_telegram_user_id: int,
     channel_id: int,
 ) -> None:
-    """
-    Aggiorna lo scheduler quando:
+    if _scheduler is None:
+        return
 
-    - Autopost ON
-    - Autopost OFF
-    - cambia intervallo scansione
-    """
-
-    config = (
-        await get_or_create_autopost_config(
-            owner_telegram_user_id,
-            channel_id,
-        )
+    config = await get_or_create_autopost_config(
+        owner_telegram_user_id,
+        channel_id,
     )
 
     if not config.is_enabled:
-        remove_autopost_channel(
-            channel_id
-        )
-
+        _remove_channel_jobs(channel_id)
         return
 
-    runtime = (
-        await get_or_create_runtime_config(
-            owner_telegram_user_id,
-            channel_id,
-        )
-    )
-
     await register_autopost_channel(
-        owner_telegram_user_id=(
-            owner_telegram_user_id
-        ),
-        channel_id=channel_id,
-        interval_minutes=int(
-            runtime
-            .scan_interval_minutes
-        ),
+        owner_telegram_user_id,
+        channel_id,
         run_now=False,
     )
 
 
-# =========================================================
-# START
-# =========================================================
+async def _supervisor_tick() -> None:
+    if _scheduler is None:
+        return
+
+    try:
+        enabled = await list_enabled_autopost_channels()
+
+        for item in enabled:
+            advanced = await get_or_create_advanced_config(
+                item.owner_telegram_user_id,
+                item.channel_id,
+            )
+            recovered = await recover_stale_publishing_for_channel(
+                item.owner_telegram_user_id,
+                item.channel_id,
+                int(advanced.stale_publish_minutes),
+            )
+            if recovered:
+                logging.warning(
+                    "Autopost recovery | channel=%s | recovered=%s",
+                    item.channel_id,
+                    recovered,
+                )
+        enabled_ids = {item.channel_id for item in enabled}
+
+        for channel_id in list(_job_signatures):
+            if channel_id not in enabled_ids:
+                _remove_channel_jobs(channel_id)
+
+        for item in enabled:
+            signature = await _channel_signature(
+                item.owner_telegram_user_id,
+                item.channel_id,
+            )
+
+            if _job_signatures.get(item.channel_id) != signature:
+                await register_autopost_channel(
+                    item.owner_telegram_user_id,
+                    item.channel_id,
+                    run_now=False,
+                )
+
+    except Exception:
+        logging.exception("Errore supervisor Autopost Fase 11.")
 
 
-async def start_autopost_scheduler(
-) -> None:
-    global _scheduler
+async def start_autopost_scheduler(bot: Bot) -> None:
+    global _scheduler, _bot
 
     if _scheduler is not None:
         return
 
-    loop = (
-        asyncio.get_running_loop()
-    )
-
+    _bot = bot
+    loop = asyncio.get_running_loop()
     _scheduler = AsyncIOScheduler(
         event_loop=loop,
         timezone=timezone.utc,
     )
-
     _scheduler.start()
 
-    enabled_channels = (
-        await list_enabled_autopost_channels()
-    )
+    enabled_channels = await list_enabled_autopost_channels()
 
     for channel in enabled_channels:
+        advanced = await get_or_create_advanced_config(
+            channel.owner_telegram_user_id,
+            channel.channel_id,
+        )
+        recovered = await recover_stale_publishing_for_channel(
+            channel.owner_telegram_user_id,
+            channel.channel_id,
+            int(advanced.stale_publish_minutes),
+        )
+        if recovered:
+            logging.warning(
+                "Startup recovery | channel=%s | recovered=%s",
+                channel.channel_id,
+                recovered,
+            )
+
         await register_autopost_channel(
-            owner_telegram_user_id=(
-                channel
-                .owner_telegram_user_id
-            ),
-            channel_id=(
-                channel.channel_id
-            ),
-            interval_minutes=(
-                channel
-                .scan_interval_minutes
-            ),
+            channel.owner_telegram_user_id,
+            channel.channel_id,
             run_now=True,
         )
 
+    _scheduler.add_job(
+        _supervisor_tick,
+        trigger="interval",
+        minutes=1,
+        id="autopost_supervisor",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
+
     logging.info(
-        (
-            "Autopost Scheduler avviato. "
-            "%s canali attivi."
-        ),
+        "Autopost Scheduler Fase 11 avviato. %s canali attivi.",
         len(enabled_channels),
     )
 
 
-# =========================================================
-# STOP
-# =========================================================
-
-
-def stop_autopost_scheduler(
-) -> None:
-    global _scheduler
+def stop_autopost_scheduler() -> None:
+    global _scheduler, _bot
 
     if _scheduler is None:
         return
 
     try:
-        _scheduler.shutdown(
-            wait=False
-        )
-
+        _scheduler.shutdown(wait=False)
     except SchedulerNotRunningError:
         pass
 
     _scheduler = None
-
-    logging.info(
-        "Autopost Scheduler fermato."
-    )
+    _bot = None
+    _job_signatures.clear()
+    logging.info("Autopost Scheduler Fase 11 fermato.")

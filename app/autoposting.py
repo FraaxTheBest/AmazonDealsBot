@@ -590,6 +590,16 @@ def channel_config_keyboard(
             ],
             [
                 InlineKeyboardButton(
+                    text=(
+                        "🧠 Autoposting avanzato"
+                    ),
+                    callback_data=(
+                        "autopost:advanced"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🗂 Categorie",
                     callback_data=(
                         "autopost:categories"
