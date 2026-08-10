@@ -586,6 +586,16 @@ def channel_config_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
+                        "♻️ Anti-duplicati"
+                    ),
+                    callback_data=(
+                        "autopost:dedupe"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
                         "⬅️ Scegli canale"
                     ),
                     callback_data=(
@@ -601,7 +611,6 @@ def channel_config_keyboard(
             ],
         ]
     )
-
 
 def categories_keyboard(
     selected: tuple[
