@@ -596,6 +596,17 @@ def channel_config_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
+                        "🧪 Pipeline completa"
+                    ),
+                    callback_data=(
+                        "autopost:"
+                        "pipeline_test"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
                         "⬅️ Scegli canale"
                     ),
                     callback_data=(
@@ -611,7 +622,7 @@ def channel_config_keyboard(
             ],
         ]
     )
-
+    
 def categories_keyboard(
     selected: tuple[
         str,
