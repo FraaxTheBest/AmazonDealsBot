@@ -569,6 +569,17 @@ def channel_config_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text=(
+                        "⚡ Attivazione "
+                        "e intervalli"
+                    ),
+                    callback_data=(
+                        "autopost:runtime"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🗂 Categorie",
                     callback_data=(
                         "autopost:categories"
