@@ -22,6 +22,9 @@ from aiogram.types import (
     Message,
 )
 
+from app.autopost_queue_ui import (
+    router as autopost_queue_router,
+)
 from app.autopost_runtime_ui import (
     router as autopost_runtime_router,
 )
@@ -64,11 +67,6 @@ from app.templates import (
 router = Router(
     name="main"
 )
-
-
-# =========================================================
-# MAIN MENU
-# =========================================================
 
 
 def main_menu_keyboard(
@@ -141,16 +139,10 @@ def main_menu_text(
         "\n\n"
         f"👋 Ciao <b>{name}</b>!"
         "\n"
-        "🔐 Ruolo: "
-        "👑 Amministratore"
+        "🔐 Ruolo: 👑 Amministratore"
         "\n\n"
         "Seleziona una funzione:"
     )
-
-
-# =========================================================
-# /START
-# =========================================================
 
 
 @router.message(
@@ -201,11 +193,6 @@ async def start_handler(
     )
 
 
-# =========================================================
-# HOME
-# =========================================================
-
-
 @router.callback_query(
     F.data == "menu:home"
 )
@@ -226,11 +213,6 @@ async def back_home(
         )
 
     await query.answer()
-
-
-# =========================================================
-# SEZIONI FUTURE
-# =========================================================
 
 
 @router.callback_query(
@@ -262,30 +244,14 @@ async def future_sections(
     )
 
 
-# =========================================================
-# MAIN
-# =========================================================
-
-
 async def main() -> None:
     settings = get_settings()
-
-    # =====================================================
-    # DATABASE
-    #
-    # Tutti i modelli vengono
-    # importati prima di init_db().
-    # =====================================================
 
     await init_db()
 
     logging.info(
         "Database inizializzato."
     )
-
-    # =====================================================
-    # BOT
-    # =====================================================
 
     bot = Bot(
         token=(
@@ -302,10 +268,6 @@ async def main() -> None:
     )
 
     dispatcher = Dispatcher()
-
-    # =====================================================
-    # ROUTERS
-    # =====================================================
 
     dispatcher.include_router(
         router
@@ -332,6 +294,10 @@ async def main() -> None:
     )
 
     dispatcher.include_router(
+        autopost_queue_router
+    )
+
+    dispatcher.include_router(
         dedupe_router
     )
 
@@ -343,28 +309,13 @@ async def main() -> None:
         templates_router
     )
 
-    # =====================================================
-    # TELEGRAM
-    # =====================================================
-
     await bot.delete_webhook(
         drop_pending_updates=True
     )
 
-    # =====================================================
-    # SCHEDULER POST PROGRAMMATI
-    # =====================================================
-
     await start_scheduler(
         bot
     )
-
-    # =====================================================
-    # SCHEDULER AUTOPOSTING
-    #
-    # Ricarica automaticamente
-    # i canali con Autoposting ON.
-    # =====================================================
 
     await start_autopost_scheduler()
 
@@ -372,29 +323,15 @@ async def main() -> None:
         "AmazonDealsBot avviato."
     )
 
-    # =====================================================
-    # POLLING
-    # =====================================================
-
     try:
         await dispatcher.start_polling(
             bot
         )
 
     finally:
-        # ================================================
-        # Prima fermiamo Autoposting,
-        # poi scheduler post manuali.
-        # ================================================
-
         stop_autopost_scheduler()
 
         stop_scheduler()
-
-
-# =========================================================
-# ENTRY POINT
-# =========================================================
 
 
 if __name__ == "__main__":
