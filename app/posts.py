@@ -276,17 +276,27 @@ def preview_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text="✅ PUBBLICA",
+                    text=(
+                        "✅ PUBBLICA ORA"
+                    ),
                     callback_data=(
                         "post:publish"
                     ),
                 ),
                 InlineKeyboardButton(
+                    text="🕒 PROGRAMMA",
+                    callback_data=(
+                        "post:schedule"
+                    ),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text="❌ SCARTA",
                     callback_data=(
                         "post:cancel"
                     ),
-                ),
+                )
             ],
             [
                 InlineKeyboardButton(
