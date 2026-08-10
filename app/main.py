@@ -70,9 +70,9 @@ def main_menu_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text="🤖 Autoposting",
+                    text="🗓 Programmati",
                     callback_data=(
-                        "menu:autopost"
+                        "menu:scheduled"
                     ),
                 ),
                 InlineKeyboardButton(
@@ -84,17 +84,25 @@ def main_menu_keyboard(
             ],
             [
                 InlineKeyboardButton(
+                    text="🤖 Autoposting",
+                    callback_data=(
+                        "menu:autopost"
+                    ),
+                ),
+                InlineKeyboardButton(
                     text="📊 Statistiche",
                     callback_data=(
                         "menu:stats"
                     ),
                 ),
+            ],
+            [
                 InlineKeyboardButton(
                     text="⚙️ Impostazioni",
                     callback_data=(
                         "menu:settings"
                     ),
-                ),
+                )
             ],
         ]
     )
@@ -130,12 +138,10 @@ async def start_handler(
 
     settings = get_settings()
 
-    is_admin = (
+    if (
         message.from_user.id
-        == settings.admin_user_id
-    )
-
-    if not is_admin:
+        != settings.admin_user_id
+    ):
         await message.answer(
             "⛔ <b>Accesso non "
             "autorizzato.</b>"
@@ -203,8 +209,10 @@ async def future_sections(
     names = {
         "menu:autopost":
             "🤖 Autoposting",
+
         "menu:stats":
             "📊 Statistiche",
+
         "menu:settings":
             "⚙️ Impostazioni",
     }
@@ -224,9 +232,6 @@ async def future_sections(
 async def main() -> None:
     settings = get_settings()
 
-    # L'import di scheduling
-    # registra anche ScheduledPost
-    # nel metadata SQLAlchemy.
     await init_db()
 
     logging.info(
@@ -249,8 +254,6 @@ async def main() -> None:
 
     dispatcher = Dispatcher()
 
-    # MAIN per primo così /start
-    # interrompe qualsiasi FSM.
     dispatcher.include_router(
         router
     )
@@ -275,8 +278,6 @@ async def main() -> None:
         drop_pending_updates=True
     )
 
-    # Avvia APScheduler e ricarica
-    # i post pending dal database.
     await start_scheduler(
         bot
     )
