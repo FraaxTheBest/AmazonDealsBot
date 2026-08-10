@@ -1,5 +1,4 @@
 from html import escape
-from urllib.parse import urlparse
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ParseMode
@@ -17,6 +16,10 @@ from aiogram.types import (
     Message,
 )
 
+from app.affiliate import (
+    affiliate_admin_text,
+    apply_affiliate_link,
+)
 from app.amazon.models import (
     ProductSnapshot,
 )
@@ -61,6 +64,11 @@ class CreatePostStates(
     waiting_custom_image = State()
 
 
+# =========================================================
+# PRODUCT STATE
+# =========================================================
+
+
 async def get_state_product(
     state: FSMContext,
 ) -> ProductSnapshot | None:
@@ -89,6 +97,11 @@ async def save_state_product(
     )
 
 
+# =========================================================
+# TEMPLATE
+# =========================================================
+
+
 async def render_saved_template(
     product: ProductSnapshot,
 ) -> str:
@@ -114,35 +127,9 @@ async def render_saved_template(
         )
 
 
-def is_amzn_short_url(
-    value: str,
-) -> bool:
-    try:
-        parsed = urlparse(
-            value.strip()
-        )
-
-    except ValueError:
-        return False
-
-    hostname = (
-        parsed.hostname.lower()
-        if parsed.hostname
-        else ""
-    )
-
-    return (
-        parsed.scheme
-        in {
-            "http",
-            "https",
-        }
-        and hostname
-        in {
-            "amzn.to",
-            "www.amzn.to",
-        }
-    )
+# =========================================================
+# IMAGES
+# =========================================================
 
 
 def get_available_images(
@@ -150,9 +137,12 @@ def get_available_images(
 ) -> list[str]:
     """
     Restituisce:
-    PRIMARY + VARIANTI.
 
-    Rimuove eventuali duplicati.
+    PRIMARY
+    +
+    VARIANTI
+
+    rimuovendo eventuali duplicati.
     """
 
     images: list[str] = []
@@ -167,7 +157,9 @@ def get_available_images(
             image
             and image not in images
         ):
-            images.append(image)
+            images.append(
+                image
+            )
 
     return images
 
@@ -181,13 +173,19 @@ def get_current_image_index(
 
     if (
         product.image_url
-        and product.image_url in images
+        and product.image_url
+        in images
     ):
         return images.index(
             product.image_url
         )
 
     return 0
+
+
+# =========================================================
+# KEYBOARDS
+# =========================================================
 
 
 def channel_selection_keyboard(
@@ -214,8 +212,12 @@ def channel_selection_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🏠 Menu principale",
-                callback_data="menu:home",
+                text=(
+                    "🏠 Menu principale"
+                ),
+                callback_data=(
+                    "menu:home"
+                ),
             )
         ]
     )
@@ -254,7 +256,9 @@ def preview_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Vedi offerta 👀",
+                    text=(
+                        "Vedi offerta 👀"
+                    ),
                     url=get_public_url(
                         product
                     ),
@@ -262,7 +266,9 @@ def preview_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text="🖼 Cambia immagine",
+                    text=(
+                        "🖼 Cambia immagine"
+                    ),
                     callback_data=(
                         "post:image_menu"
                     ),
@@ -284,7 +290,9 @@ def preview_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text="⬅️ Cambia prodotto",
+                    text=(
+                        "⬅️ Cambia prodotto"
+                    ),
                     callback_data=(
                         "post:retry_product"
                     ),
@@ -307,7 +315,9 @@ def published_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Vedi offerta 👀",
+                    text=(
+                        "Vedi offerta 👀"
+                    ),
                     url=get_public_url(
                         product
                     ),
@@ -323,8 +333,12 @@ def home_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🏠 Menu principale",
-                    callback_data="menu:home",
+                    text=(
+                        "🏠 Menu principale"
+                    ),
+                    callback_data=(
+                        "menu:home"
+                    ),
                 )
             ]
         ]
@@ -405,6 +419,11 @@ def custom_image_keyboard(
     )
 
 
+# =========================================================
+# TEXT
+# =========================================================
+
+
 def product_preview_text(
     rendered_post: str,
 ) -> str:
@@ -433,9 +452,9 @@ def image_picker_caption(
             "Nessuna immagine disponibile."
         )
 
-    selected_image = images[
-        index
-    ]
+    selected_image = (
+        images[index]
+    )
 
     if (
         selected_image
@@ -456,11 +475,17 @@ def image_picker_caption(
         f"{image_type}\n"
         f"Immagine {index + 1} "
         f"di {total}\n\n"
-        "🧪 Per ora la galleria è DEMO.\n"
+        "🧪 Per ora la galleria "
+        "è DEMO.\n"
         "Con il provider Amazon reale "
         "la prima sarà la foto PRIMARY "
         "del prodotto."
     )
+
+
+# =========================================================
+# TELEGRAM HELPERS
+# =========================================================
 
 
 async def delete_message_safely(
@@ -480,17 +505,43 @@ async def send_preview(
     bot: Bot,
     chat_id: int,
     product: ProductSnapshot,
+    state: FSMContext,
 ) -> None:
+    """
+    Anteprima amministratore.
+
+    Include anche lo stato
+    dell'Affiliate Engine.
+
+    Lo stato affiliate NON finirà
+    nel post pubblico.
+    """
+
     rendered_post = (
         await render_saved_template(
             product
         )
     )
 
+    data = await state.get_data()
+
+    affiliate_status = data.get(
+        "affiliate_status"
+    )
+
+    if not affiliate_status:
+        affiliate_status = (
+            "🔐 <b>Affiliate Engine</b>\n"
+            "ℹ️ Stato non disponibile."
+        )
+
     preview_text = (
         product_preview_text(
             rendered_post
         )
+        + "\n\n"
+        "────────────────\n\n"
+        + affiliate_status
     )
 
     await send_product_post(
@@ -529,9 +580,12 @@ async def send_image_picker(
                 custom_image_keyboard()
             ),
         )
+
         return
 
-    index = index % len(images)
+    index = (
+        index % len(images)
+    )
 
     await bot.send_photo(
         chat_id=chat_id,
@@ -546,6 +600,11 @@ async def send_image_picker(
             image_picker_keyboard()
         ),
     )
+
+
+# =========================================================
+# CREA POST
+# =========================================================
 
 
 @router.callback_query(
@@ -569,6 +628,7 @@ async def create_post_start(
             "almeno un canale.",
             show_alert=True,
         )
+
         return
 
     if query.message is not None:
@@ -584,6 +644,11 @@ async def create_post_start(
         )
 
     await query.answer()
+
+
+# =========================================================
+# SELEZIONE CANALE
+# =========================================================
 
 
 @router.callback_query(
@@ -614,6 +679,7 @@ async def select_post_channel(
             "Canale non trovato.",
             show_alert=True,
         )
+
         return
 
     await state.update_data(
@@ -621,7 +687,8 @@ async def select_post_channel(
     )
 
     await state.set_state(
-        CreatePostStates.waiting_product
+        CreatePostStates
+        .waiting_product
     )
 
     if query.message is not None:
@@ -635,9 +702,9 @@ async def select_post_channel(
             "• URL Amazon.it\n"
             "• link corto amzn.to\n"
             "• direttamente l'ASIN\n\n"
-            "Se inserisci un link "
-            "<b>amzn.to</b>, il bot "
-            "manterrà quel link corto.",
+            "🔐 L'Affiliate Engine "
+            "controllerà automaticamente "
+            "quale link utilizzare.",
             reply_markup=(
                 product_input_keyboard()
             ),
@@ -676,8 +743,14 @@ async def back_to_channel_selection(
     await query.answer()
 
 
+# =========================================================
+# RICEZIONE PRODOTTO
+# =========================================================
+
+
 @router.message(
-    CreatePostStates.waiting_product
+    CreatePostStates
+    .waiting_product
 )
 async def receive_product(
     message: Message,
@@ -693,6 +766,7 @@ async def receive_product(
                 product_input_keyboard()
             ),
         )
+
         return
 
     submitted_value = (
@@ -715,32 +789,60 @@ async def receive_product(
                 product_input_keyboard()
             ),
         )
+
         return
 
+    #
+    # 1. Recuperiamo prodotto
+    #
     product = (
-        await amazon_provider.get_product(
+        await amazon_provider
+        .get_product(
             asin
         )
     )
 
-    if is_amzn_short_url(
-        submitted_value
-    ):
-        product = product.model_copy(
-            update={
-                "affiliate_short_url":
-                    submitted_value
-            }
-        )
+    #
+    # 2. Affiliate Engine
+    #
+    settings = get_settings()
 
+    product, affiliate_decision = (
+        await apply_affiliate_link(
+            product=product,
+            submitted_value=(
+                submitted_value
+            ),
+            expected_partner_tag=(
+                settings.amazon_partner_tag
+            ),
+        )
+    )
+
+    #
+    # 3. Salviamo prodotto aggiornato
+    #
     await save_state_product(
         state,
         product,
     )
 
-    # Finito l'inserimento prodotto.
-    # Manteniamo i dati FSM ma non
-    # aspettiamo più un nuovo link.
+    #
+    # 4. Salviamo stato affiliate
+    #    solo per anteprima admin.
+    #
+    await state.update_data(
+        affiliate_status=(
+            affiliate_admin_text(
+                affiliate_decision
+            )
+        )
+    )
+
+    #
+    # Non aspettiamo più
+    # un nuovo prodotto.
+    #
     await state.set_state(
         None
     )
@@ -750,6 +852,7 @@ async def receive_product(
             bot=bot,
             chat_id=message.chat.id,
             product=product,
+            state=state,
         )
 
     except TelegramAPIError:
@@ -757,6 +860,11 @@ async def receive_product(
             "❌ Non riesco a creare "
             "l'anteprima del post."
         )
+
+
+# =========================================================
+# IMAGE MENU
+# =========================================================
 
 
 @router.callback_query(
@@ -778,12 +886,17 @@ async def open_image_menu(
             "Sessione scaduta.",
             show_alert=True,
         )
+
         return
 
     images = get_available_images(
         product
     )
 
+    #
+    # Nessuna immagine Amazon:
+    # andiamo direttamente al caricamento.
+    #
     if not images:
         await delete_message_safely(
             query.message
@@ -808,6 +921,7 @@ async def open_image_menu(
         )
 
         await query.answer()
+
         return
 
     index = get_current_image_index(
@@ -847,6 +961,11 @@ async def open_image_menu(
     await query.answer()
 
 
+# =========================================================
+# NAVIGAZIONE IMMAGINI
+# =========================================================
+
+
 @router.callback_query(
     F.data == "post:image_prev"
 )
@@ -868,6 +987,7 @@ async def browse_images(
             "Sessione scaduta.",
             show_alert=True,
         )
+
         return
 
     images = get_available_images(
@@ -879,6 +999,7 @@ async def browse_images(
             "Nessuna immagine.",
             show_alert=True,
         )
+
         return
 
     data = await state.get_data()
@@ -933,9 +1054,15 @@ async def browse_images(
                 "questa immagine.",
                 show_alert=True,
             )
+
             return
 
     await query.answer()
+
+
+# =========================================================
+# USA IMMAGINE SELEZIONATA
+# =========================================================
 
 
 @router.callback_query(
@@ -957,6 +1084,7 @@ async def use_selected_image(
             "Sessione scaduta.",
             show_alert=True,
         )
+
         return
 
     images = get_available_images(
@@ -968,6 +1096,7 @@ async def use_selected_image(
             "Nessuna immagine.",
             show_alert=True,
         )
+
         return
 
     data = await state.get_data()
@@ -979,13 +1108,17 @@ async def use_selected_image(
         )
     )
 
-    index = index % len(images)
+    index = (
+        index % len(images)
+    )
 
-    product = product.model_copy(
-        update={
-            "image_url":
-                images[index]
-        }
+    product = (
+        product.model_copy(
+            update={
+                "image_url":
+                    images[index]
+            }
+        )
     )
 
     await save_state_product(
@@ -1005,11 +1138,17 @@ async def use_selected_image(
         bot=bot,
         chat_id=query.from_user.id,
         product=product,
+        state=state,
     )
 
     await query.answer(
         "Immagine selezionata!"
     )
+
+
+# =========================================================
+# IMMAGINE PERSONALIZZATA
+# =========================================================
 
 
 @router.callback_query(
@@ -1031,6 +1170,7 @@ async def custom_image_start(
             "Sessione scaduta.",
             show_alert=True,
         )
+
         return
 
     await state.set_state(
@@ -1077,6 +1217,7 @@ async def receive_custom_image(
                 custom_image_keyboard()
             ),
         )
+
         return
 
     product = (
@@ -1092,19 +1233,25 @@ async def receive_custom_image(
             "❌ Sessione scaduta.\n"
             "Ricomincia da /start."
         )
+
         return
 
-    # Prendiamo la versione più grande
-    # ricevuta da Telegram.
+    #
+    # Telegram invia diverse
+    # risoluzioni della stessa foto.
+    # Prendiamo la più grande.
+    #
     telegram_photo = (
         message.photo[-1]
     )
 
-    product = product.model_copy(
-        update={
-            "image_url":
-                telegram_photo.file_id
-        }
+    product = (
+        product.model_copy(
+            update={
+                "image_url":
+                    telegram_photo.file_id
+            }
+        )
     )
 
     await save_state_product(
@@ -1125,7 +1272,13 @@ async def receive_custom_image(
         bot=bot,
         chat_id=message.chat.id,
         product=product,
+        state=state,
     )
+
+
+# =========================================================
+# TORNA DA IMMAGINI
+# =========================================================
 
 
 @router.callback_query(
@@ -1147,6 +1300,7 @@ async def back_from_images(
             "Sessione scaduta.",
             show_alert=True,
         )
+
         return
 
     await state.set_state(
@@ -1161,9 +1315,15 @@ async def back_from_images(
         bot=bot,
         chat_id=query.from_user.id,
         product=product,
+        state=state,
     )
 
     await query.answer()
+
+
+# =========================================================
+# CAMBIA PRODOTTO
+# =========================================================
 
 
 @router.callback_query(
@@ -1185,6 +1345,7 @@ async def retry_product(
             "Sessione scaduta.",
             show_alert=True,
         )
+
         return
 
     settings = get_settings()
@@ -1199,11 +1360,13 @@ async def retry_product(
             "Canale non trovato.",
             show_alert=True,
         )
+
         return
 
     await state.update_data(
         product=None,
         image_index=0,
+        affiliate_status=None,
     )
 
     await state.set_state(
@@ -1233,6 +1396,11 @@ async def retry_product(
     )
 
     await query.answer()
+
+
+# =========================================================
+# PUBBLICAZIONE
+# =========================================================
 
 
 @router.callback_query(
@@ -1268,6 +1436,7 @@ async def publish_post(
         )
 
         await state.clear()
+
         return
 
     channel = await get_channel(
@@ -1280,6 +1449,7 @@ async def publish_post(
             "Canale non trovato.",
             show_alert=True,
         )
+
         return
 
     rendered_post = (
@@ -1288,6 +1458,15 @@ async def publish_post(
         )
     )
 
+    #
+    # IMPORTANTE:
+    #
+    # affiliate_status NON viene
+    # inserito qui.
+    #
+    # È informazione solo per
+    # l'amministratore.
+    #
     post_text = (
         rendered_post
         + "\n\n"
@@ -1307,6 +1486,7 @@ async def publish_post(
             "come caption della foto.",
             show_alert=True,
         )
+
         return
 
     try:
@@ -1329,6 +1509,7 @@ async def publish_post(
             "❌ Pubblicazione fallita.",
             show_alert=True,
         )
+
         return
 
     await state.clear()
@@ -1353,6 +1534,11 @@ async def publish_post(
     await query.answer(
         "Pubblicato!"
     )
+
+
+# =========================================================
+# CANCELLA POST
+# =========================================================
 
 
 @router.callback_query(
