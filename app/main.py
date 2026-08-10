@@ -22,6 +22,13 @@ from aiogram.types import (
     Message,
 )
 
+from app.autopost_runtime_ui import (
+    router as autopost_runtime_router,
+)
+from app.autopost_scheduler import (
+    start_autopost_scheduler,
+    stop_autopost_scheduler,
+)
 from app.autoposting import (
     router as autoposting_router,
 )
@@ -57,6 +64,11 @@ from app.templates import (
 router = Router(
     name="main"
 )
+
+
+# =========================================================
+# MAIN MENU
+# =========================================================
 
 
 def main_menu_keyboard(
@@ -125,12 +137,20 @@ def main_menu_text(
     )
 
     return (
-        "🛒 <b>AmazonDealsBot</b>\n\n"
-        f"👋 Ciao <b>{name}</b>!\n"
-        "🔐 Ruolo: 👑 Amministratore"
+        "🛒 <b>AmazonDealsBot</b>"
+        "\n\n"
+        f"👋 Ciao <b>{name}</b>!"
+        "\n"
+        "🔐 Ruolo: "
+        "👑 Amministratore"
         "\n\n"
         "Seleziona una funzione:"
     )
+
+
+# =========================================================
+# /START
+# =========================================================
 
 
 @router.message(
@@ -181,6 +201,11 @@ async def start_handler(
     )
 
 
+# =========================================================
+# HOME
+# =========================================================
+
+
 @router.callback_query(
     F.data == "menu:home"
 )
@@ -201,6 +226,11 @@ async def back_home(
         )
 
     await query.answer()
+
+
+# =========================================================
+# SEZIONI FUTURE
+# =========================================================
 
 
 @router.callback_query(
@@ -232,14 +262,30 @@ async def future_sections(
     )
 
 
+# =========================================================
+# MAIN
+# =========================================================
+
+
 async def main() -> None:
     settings = get_settings()
+
+    # =====================================================
+    # DATABASE
+    #
+    # Tutti i modelli vengono
+    # importati prima di init_db().
+    # =====================================================
 
     await init_db()
 
     logging.info(
         "Database inizializzato."
     )
+
+    # =====================================================
+    # BOT
+    # =====================================================
 
     bot = Bot(
         token=(
@@ -258,16 +304,12 @@ async def main() -> None:
     dispatcher = Dispatcher()
 
     # =====================================================
-    # MAIN
+    # ROUTERS
     # =====================================================
 
     dispatcher.include_router(
         router
     )
-
-    # =====================================================
-    # FUNZIONI
-    # =====================================================
 
     dispatcher.include_router(
         channels_router
@@ -286,6 +328,10 @@ async def main() -> None:
     )
 
     dispatcher.include_router(
+        autopost_runtime_router
+    )
+
+    dispatcher.include_router(
         dedupe_router
     )
 
@@ -297,17 +343,38 @@ async def main() -> None:
         templates_router
     )
 
+    # =====================================================
+    # TELEGRAM
+    # =====================================================
+
     await bot.delete_webhook(
         drop_pending_updates=True
     )
+
+    # =====================================================
+    # SCHEDULER POST PROGRAMMATI
+    # =====================================================
 
     await start_scheduler(
         bot
     )
 
+    # =====================================================
+    # SCHEDULER AUTOPOSTING
+    #
+    # Ricarica automaticamente
+    # i canali con Autoposting ON.
+    # =====================================================
+
+    await start_autopost_scheduler()
+
     logging.info(
         "AmazonDealsBot avviato."
     )
+
+    # =====================================================
+    # POLLING
+    # =====================================================
 
     try:
         await dispatcher.start_polling(
@@ -315,7 +382,19 @@ async def main() -> None:
         )
 
     finally:
+        # ================================================
+        # Prima fermiamo Autoposting,
+        # poi scheduler post manuali.
+        # ================================================
+
+        stop_autopost_scheduler()
+
         stop_scheduler()
+
+
+# =========================================================
+# ENTRY POINT
+# =========================================================
 
 
 if __name__ == "__main__":
