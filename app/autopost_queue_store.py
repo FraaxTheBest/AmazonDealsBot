@@ -46,6 +46,8 @@ STATUS_PENDING = "pending"
 
 STATUS_APPROVED = "approved"
 
+STATUS_PUBLISHING = "publishing"
+
 STATUS_REJECTED = "rejected"
 
 STATUS_PUBLISHED = "published"
@@ -53,9 +55,16 @@ STATUS_PUBLISHED = "published"
 STATUS_FAILED = "failed"
 
 
+#
+# Questi stati impediscono allo
+# scheduler di creare un'altra riga
+# identica per lo stesso ASIN.
+#
 ACTIVE_STATUSES = (
     STATUS_PENDING,
     STATUS_APPROVED,
+    STATUS_PUBLISHING,
+    STATUS_REJECTED,
 )
 
 
@@ -67,15 +76,6 @@ ACTIVE_STATUSES = (
 class AutopostCandidate(
     Base
 ):
-    """
-    Prodotto trovato automaticamente
-    e inserito nella coda Autopost.
-
-    La tabella contiene uno snapshot
-    completo del prodotto al momento
-    della scansione.
-    """
-
     __tablename__ = (
         "autopost_candidates"
     )
@@ -250,7 +250,7 @@ class AutopostCandidate(
 
 
 # =========================================================
-# RISULTATO INSERIMENTO
+# RISULTATO QUEUE
 # =========================================================
 
 
@@ -349,7 +349,7 @@ async def _get_owner_channel(
 
 
 # =========================================================
-# SALVA CANDIDATI
+# INSERIMENTO CODA - 10C
 # =========================================================
 
 
@@ -361,23 +361,9 @@ async def enqueue_autopost_candidates(
     ],
     source: str = "demo",
 ) -> QueueSaveResult:
-    """
-    Inserisce i candidati nella coda.
-
-    Regole:
-
-    - nuovo ASIN -> crea PENDING
-    - ASIN già PENDING -> aggiorna snapshot
-    - ASIN APPROVED -> non duplica
-    """
-
     raw_candidates = tuple(
         candidates
     )
-
-    # =====================================================
-    # RIMUOVI DUPLICATI NELLO STESSO BATCH
-    # =====================================================
 
     selected: list[
         DealCandidate
@@ -511,26 +497,23 @@ async def enqueue_autopost_candidates(
             )
 
             # =============================================
-            # GIÀ APPROVATO
+            # APPROVED / REJECTED / PUBLISHING
             #
-            # Non modifichiamo un prodotto
-            # già approvato dall'admin.
+            # Non tocchiamo la decisione
+            # dell'amministratore.
             # =============================================
 
             if (
                 existing is not None
                 and existing.status
-                == STATUS_APPROVED
+                != STATUS_PENDING
             ):
                 skipped_active_count += 1
 
                 continue
 
             # =============================================
-            # GIÀ PENDING
-            #
-            # Aggiorniamo il prodotto invece
-            # di creare un duplicato.
+            # PENDING GIÀ PRESENTE
             # =============================================
 
             if existing is not None:
@@ -585,7 +568,7 @@ async def enqueue_autopost_candidates(
                 continue
 
             # =============================================
-            # NUOVO CANDIDATO
+            # NUOVO
             # =============================================
 
             queue_candidate = (
@@ -769,7 +752,7 @@ async def list_owner_pending_candidates(
 
 
 # =========================================================
-# RECUPERA SINGOLO CANDIDATO
+# GET CANDIDATO
 # =========================================================
 
 
@@ -815,3 +798,341 @@ async def get_owner_candidate(
             row[0],
             row[1],
         )
+
+
+# =========================================================
+# APPROVA - 10D
+# =========================================================
+
+
+async def approve_candidate(
+    owner_telegram_user_id: int,
+    candidate_id: int,
+) -> AutopostCandidate | None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                AutopostCandidate
+            )
+            .join(
+                User,
+                AutopostCandidate
+                .owner_id
+                == User.id,
+            )
+            .where(
+                AutopostCandidate.id
+                == candidate_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                AutopostCandidate.status
+                == STATUS_PENDING,
+            )
+        )
+
+        candidate = (
+            result.scalar_one_or_none()
+        )
+
+        if candidate is None:
+            return None
+
+        now = datetime.now(
+            timezone.utc
+        )
+
+        candidate.status = (
+            STATUS_APPROVED
+        )
+
+        candidate.decided_at = now
+
+        candidate.updated_at = now
+
+        await session.commit()
+
+        await session.refresh(
+            candidate
+        )
+
+        return candidate
+
+
+# =========================================================
+# SCARTA - 10D
+# =========================================================
+
+
+async def reject_candidate(
+    owner_telegram_user_id: int,
+    candidate_id: int,
+) -> AutopostCandidate | None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                AutopostCandidate
+            )
+            .join(
+                User,
+                AutopostCandidate
+                .owner_id
+                == User.id,
+            )
+            .where(
+                AutopostCandidate.id
+                == candidate_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                AutopostCandidate.status
+                == STATUS_PENDING,
+            )
+        )
+
+        candidate = (
+            result.scalar_one_or_none()
+        )
+
+        if candidate is None:
+            return None
+
+        now = datetime.now(
+            timezone.utc
+        )
+
+        candidate.status = (
+            STATUS_REJECTED
+        )
+
+        candidate.decided_at = now
+
+        candidate.updated_at = now
+
+        await session.commit()
+
+        await session.refresh(
+            candidate
+        )
+
+        return candidate
+
+
+# =========================================================
+# RIPORTA A PENDING
+# =========================================================
+
+
+async def restore_candidate_pending(
+    owner_telegram_user_id: int,
+    candidate_id: int,
+) -> AutopostCandidate | None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                AutopostCandidate
+            )
+            .join(
+                User,
+                AutopostCandidate
+                .owner_id
+                == User.id,
+            )
+            .where(
+                AutopostCandidate.id
+                == candidate_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                AutopostCandidate.status
+                == STATUS_APPROVED,
+            )
+        )
+
+        candidate = (
+            result.scalar_one_or_none()
+        )
+
+        if candidate is None:
+            return None
+
+        candidate.status = (
+            STATUS_PENDING
+        )
+
+        candidate.decided_at = None
+
+        candidate.updated_at = (
+            datetime.now(
+                timezone.utc
+            )
+        )
+
+        await session.commit()
+
+        await session.refresh(
+            candidate
+        )
+
+        return candidate
+
+
+# =========================================================
+# CLAIM PUBBLICAZIONE - 10E
+# =========================================================
+
+
+async def claim_candidate_for_publish(
+    owner_telegram_user_id: int,
+    candidate_id: int,
+) -> bool:
+    """
+    approved -> publishing
+
+    Serve a impedire doppie
+    pubblicazioni se il pulsante
+    viene premuto più volte.
+    """
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                AutopostCandidate
+            )
+            .join(
+                User,
+                AutopostCandidate
+                .owner_id
+                == User.id,
+            )
+            .where(
+                AutopostCandidate.id
+                == candidate_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                AutopostCandidate.status
+                == STATUS_APPROVED,
+            )
+        )
+
+        candidate = (
+            result.scalar_one_or_none()
+        )
+
+        if candidate is None:
+            return False
+
+        candidate.status = (
+            STATUS_PUBLISHING
+        )
+
+        candidate.updated_at = (
+            datetime.now(
+                timezone.utc
+            )
+        )
+
+        await session.commit()
+
+        return True
+
+
+# =========================================================
+# ERRORE PUBBLICAZIONE
+# =========================================================
+
+
+async def restore_candidate_approved(
+    owner_telegram_user_id: int,
+    candidate_id: int,
+) -> None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                AutopostCandidate
+            )
+            .join(
+                User,
+                AutopostCandidate
+                .owner_id
+                == User.id,
+            )
+            .where(
+                AutopostCandidate.id
+                == candidate_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                AutopostCandidate.status
+                == STATUS_PUBLISHING,
+            )
+        )
+
+        candidate = (
+            result.scalar_one_or_none()
+        )
+
+        if candidate is None:
+            return
+
+        candidate.status = (
+            STATUS_APPROVED
+        )
+
+        candidate.updated_at = (
+            datetime.now(
+                timezone.utc
+            )
+        )
+
+        await session.commit()
+
+
+# =========================================================
+# PUBBLICATO - 10E
+# =========================================================
+
+
+async def mark_candidate_published(
+    owner_telegram_user_id: int,
+    candidate_id: int,
+) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                AutopostCandidate
+            )
+            .join(
+                User,
+                AutopostCandidate
+                .owner_id
+                == User.id,
+            )
+            .where(
+                AutopostCandidate.id
+                == candidate_id,
+                User.telegram_user_id
+                == owner_telegram_user_id,
+                AutopostCandidate.status
+                == STATUS_PUBLISHING,
+            )
+        )
+
+        candidate = (
+            result.scalar_one_or_none()
+        )
+
+        if candidate is None:
+            return False
+
+        now = datetime.now(
+            timezone.utc
+        )
+
+        candidate.status = (
+            STATUS_PUBLISHED
+        )
+
+        candidate.published_at = now
+
+        candidate.updated_at = now
+
+        await session.commit()
+
+        return True
