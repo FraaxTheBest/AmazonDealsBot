@@ -12,6 +12,9 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
+from apscheduler.jobstores.base import (
+    JobLookupError,
+)
 from apscheduler.schedulers import (
     SchedulerNotRunningError,
 )
@@ -47,14 +50,6 @@ _bot: Bot | None = None
 def normalize_utc(
     value: datetime,
 ) -> datetime:
-    """
-    SQLite può restituire datetime
-    senza tzinfo.
-
-    Nel DB gli orari dello scheduler
-    sono sempre interpretati come UTC.
-    """
-
     if value.tzinfo is None:
         return value.replace(
             tzinfo=timezone.utc
@@ -62,6 +57,14 @@ def normalize_utc(
 
     return value.astimezone(
         timezone.utc
+    )
+
+
+def get_job_id(
+    post_id: int,
+) -> str:
+    return (
+        f"scheduled_post_{post_id}"
     )
 
 
@@ -87,10 +90,6 @@ def scheduled_post_keyboard(
 async def publish_scheduled_post(
     post_id: int,
 ) -> None:
-    """
-    Job eseguito da APScheduler.
-    """
-
     if _bot is None:
         logging.error(
             "Scheduler senza Bot: "
@@ -188,14 +187,6 @@ def schedule_post_job(
     post_id: int,
     run_at: datetime,
 ) -> None:
-    """
-    Inserisce un post nella coda
-    APScheduler.
-
-    Il DB rimane comunque la
-    fonte dati principale.
-    """
-
     if _scheduler is None:
         raise RuntimeError(
             "Scheduler non avviato."
@@ -209,9 +200,6 @@ def schedule_post_job(
         timezone.utc
     )
 
-    # Se al riavvio troviamo un post
-    # che era già scaduto, lo facciamo
-    # partire quasi immediatamente.
     if run_date <= now:
         run_date = (
             now
@@ -223,15 +211,52 @@ def schedule_post_job(
         trigger="date",
         run_date=run_date,
         args=[post_id],
-        id=(
-            f"scheduled_post_{post_id}"
+        id=get_job_id(
+            post_id
         ),
         replace_existing=True,
-
-        # Se il computer ha avuto
-        # un breve ritardo, il job
-        # può comunque partire.
         misfire_grace_time=86400,
+    )
+
+
+def cancel_post_job(
+    post_id: int,
+) -> None:
+    """
+    Rimuove il job dalla memoria
+    dello scheduler.
+
+    Il DB viene aggiornato
+    separatamente.
+    """
+
+    if _scheduler is None:
+        return
+
+    try:
+        _scheduler.remove_job(
+            get_job_id(
+                post_id
+            )
+        )
+
+    except JobLookupError:
+        pass
+
+
+def reschedule_post_job(
+    post_id: int,
+    run_at: datetime,
+) -> None:
+    """
+    replace_existing=True rende
+    questa operazione sicura anche
+    se il job esiste già.
+    """
+
+    schedule_post_job(
+        post_id=post_id,
+        run_at=run_at,
     )
 
 
