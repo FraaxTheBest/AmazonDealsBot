@@ -36,6 +36,9 @@ from app.database import (
 from app.dedupe_ui import (
     router as dedupe_router,
 )
+from app.pipeline_ui import (
+    router as pipeline_router,
+)
 from app.posts import (
     router as posts_router,
 )
@@ -232,15 +235,6 @@ async def future_sections(
 async def main() -> None:
     settings = get_settings()
 
-    #
-    # dedupe_ui viene importato
-    # prima di init_db().
-    #
-    # Quindi PublicationEvent
-    # è già registrato nel metadata
-    # SQLAlchemy e la tabella nuova
-    # verrà creata automaticamente.
-    #
     await init_db()
 
     logging.info(
@@ -263,9 +257,17 @@ async def main() -> None:
 
     dispatcher = Dispatcher()
 
+    # =====================================================
+    # MAIN
+    # =====================================================
+
     dispatcher.include_router(
         router
     )
+
+    # =====================================================
+    # FUNZIONI
+    # =====================================================
 
     dispatcher.include_router(
         channels_router
@@ -285,6 +287,10 @@ async def main() -> None:
 
     dispatcher.include_router(
         dedupe_router
+    )
+
+    dispatcher.include_router(
+        pipeline_router
     )
 
     dispatcher.include_router(
