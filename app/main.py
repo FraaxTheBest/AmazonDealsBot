@@ -33,6 +33,13 @@ from app.database import (
 from app.posts import (
     router as posts_router,
 )
+from app.scheduling import (
+    router as scheduling_router,
+)
+from app.scheduler_service import (
+    start_scheduler,
+    stop_scheduler,
+)
 from app.templates import (
     router as templates_router,
 )
@@ -133,6 +140,7 @@ async def start_handler(
             "⛔ <b>Accesso non "
             "autorizzato.</b>"
         )
+
         return
 
     await register_user(
@@ -216,11 +224,9 @@ async def future_sections(
 async def main() -> None:
     settings = get_settings()
 
-    # A questo punto PostTemplate
-    # è già stato importato tramite
-    # app.templates / template_store.
-    # create_all crea quindi anche
-    # la tabella post_templates.
+    # L'import di scheduling
+    # registra anche ScheduledPost
+    # nel metadata SQLAlchemy.
     await init_db()
 
     logging.info(
@@ -244,7 +250,7 @@ async def main() -> None:
     dispatcher = Dispatcher()
 
     # MAIN per primo così /start
-    # può interrompere qualsiasi FSM.
+    # interrompe qualsiasi FSM.
     dispatcher.include_router(
         router
     )
@@ -258,6 +264,10 @@ async def main() -> None:
     )
 
     dispatcher.include_router(
+        scheduling_router
+    )
+
+    dispatcher.include_router(
         templates_router
     )
 
@@ -265,13 +275,23 @@ async def main() -> None:
         drop_pending_updates=True
     )
 
+    # Avvia APScheduler e ricarica
+    # i post pending dal database.
+    await start_scheduler(
+        bot
+    )
+
     logging.info(
         "AmazonDealsBot avviato."
     )
 
-    await dispatcher.start_polling(
-        bot
-    )
+    try:
+        await dispatcher.start_polling(
+            bot
+        )
+
+    finally:
+        stop_scheduler()
 
 
 if __name__ == "__main__":
