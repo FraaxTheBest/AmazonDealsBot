@@ -17,6 +17,21 @@ from aiogram.types import (
 from app.amazon.models import (
     ProductSnapshot,
 )
+from app.autopost_store import (
+    get_or_create_autopost_config,
+    get_selected_categories,
+    set_selected_categories,
+)
+from app.categories import (
+    AUTOPOST_CATEGORIES,
+    categories_summary,
+    filter_products_by_categories,
+)
+from app.config import get_settings
+from app.database import (
+    get_channel,
+    list_channels,
+)
 from app.deal_pipeline import (
     DealBatchResult,
     evaluate_products,
@@ -38,20 +53,25 @@ def build_demo_products(
     ProductSnapshot
 ]:
     """
-    Simula una lista ricevuta
-    in futuro dal provider.
+    Simula prodotti provenienti
+    dal provider.
 
-    NON sono prodotti Amazon reali.
+    Le categorie sono interne
+    al bot.
     """
 
     excellent = ProductSnapshot(
         asin="B0DEMO0001",
         title=(
-            "DEMO - Offerta eccellente"
+            "DEMO - Smartphone "
+            "offerta eccellente"
         ),
         detail_url=(
             "https://www.amazon.it/"
             "dp/B0DEMO0001"
+        ),
+        category_key=(
+            "electronics"
         ),
         current_price=Decimal(
             "69.99"
@@ -74,11 +94,15 @@ def build_demo_products(
     good = ProductSnapshot(
         asin="B0DEMO0002",
         title=(
-            "DEMO - Offerta buona"
+            "DEMO - Casa e cucina "
+            "offerta buona"
         ),
         detail_url=(
             "https://www.amazon.it/"
             "dp/B0DEMO0002"
+        ),
+        category_key=(
+            "home_kitchen"
         ),
         current_price=Decimal(
             "79.99"
@@ -102,11 +126,15 @@ def build_demo_products(
         ProductSnapshot(
             asin="B0DEMO0003",
             title=(
-                "DEMO - Sconto troppo basso"
+                "DEMO - Elettronica "
+                "sconto basso"
             ),
             detail_url=(
                 "https://www.amazon.it/"
                 "dp/B0DEMO0003"
+            ),
+            category_key=(
+                "electronics"
             ),
             current_price=Decimal(
                 "94.99"
@@ -131,13 +159,14 @@ def build_demo_products(
         ProductSnapshot(
             asin="B0DEMO0004",
             title=(
-                "DEMO - Prodotto "
+                "DEMO - Sport "
                 "non disponibile"
             ),
             detail_url=(
                 "https://www.amazon.it/"
                 "dp/B0DEMO0004"
             ),
+            category_key="sports",
             current_price=Decimal(
                 "49.99"
             ),
@@ -163,11 +192,15 @@ def build_demo_products(
         ProductSnapshot(
             asin="B0DEMO0005",
             title=(
-                "DEMO - Prezzo mancante"
+                "DEMO - Casa "
+                "prezzo mancante"
             ),
             detail_url=(
                 "https://www.amazon.it/"
                 "dp/B0DEMO0005"
+            ),
+            category_key=(
+                "home_kitchen"
             ),
             current_price=None,
             original_price=Decimal(
@@ -194,7 +227,7 @@ def build_demo_products(
 
 
 # =========================================================
-# KEYBOARDS
+# GENERIC KEYBOARDS
 # =========================================================
 
 
@@ -202,6 +235,16 @@ def autopost_menu_keyboard(
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "⚙️ Configura canale"
+                    ),
+                    callback_data=(
+                        "autopost:channels"
+                    ),
+                )
+            ],
             [
                 InlineKeyboardButton(
                     text=(
@@ -224,15 +267,222 @@ def autopost_menu_keyboard(
     )
 
 
-def batch_result_keyboard(
+def channel_selection_keyboard(
+    channels,
+) -> InlineKeyboardMarkup:
+    rows = []
+
+    for channel in channels:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "📢 "
+                        f"{channel.title[:35]}"
+                    ),
+                    callback_data=(
+                        "autopost:channel:"
+                        f"{channel.id}"
+                    ),
+                )
+            ]
+        )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ Autoposting",
+                callback_data=(
+                    "menu:autopost"
+                ),
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+
+
+def channel_config_keyboard(
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=(
-                        "🔄 Ripeti test"
+                        "🗂 Categorie"
                     ),
+                    callback_data=(
+                        "autopost:categories"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "🎛 Filtri"
+                    ),
+                    callback_data=(
+                        "autopost:filters_future"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "⬅️ Scegli canale"
+                    ),
+                    callback_data=(
+                        "autopost:channels"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    text="🏠 Home",
+                    callback_data=(
+                        "menu:home"
+                    ),
+                ),
+            ],
+        ]
+    )
+
+
+def categories_keyboard(
+    selected: tuple[
+        str,
+        ...
+    ],
+) -> InlineKeyboardMarkup:
+    rows = []
+
+    all_selected = (
+        len(selected) == 0
+    )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=(
+                    (
+                        "✅ "
+                        if all_selected
+                        else "⬜ "
+                    )
+                    + "Tutte le categorie"
+                ),
+                callback_data=(
+                    "autopost:category_all"
+                ),
+            )
+        ]
+    )
+
+    current_row = []
+
+    for category in (
+        AUTOPOST_CATEGORIES
+    ):
+        checked = (
+            category.key
+            in selected
+        )
+
+        text = (
+            (
+                "✅ "
+                if checked
+                else "⬜ "
+            )
+            + category.emoji
+            + " "
+            + category.label
+        )
+
+        current_row.append(
+            InlineKeyboardButton(
+                text=text,
+                callback_data=(
+                    "autopost:category:"
+                    f"{category.key}"
+                ),
+            )
+        )
+
+        if len(current_row) == 2:
+            rows.append(
+                current_row
+            )
+
+            current_row = []
+
+    if current_row:
+        rows.append(
+            current_row
+        )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=(
+                    "🧪 Test categorie"
+                ),
+                callback_data=(
+                    "autopost:category_test"
+                ),
+            )
+        ]
+    )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=(
+                    "⬅️ Configurazione"
+                ),
+                callback_data=(
+                    "autopost:config_back"
+                ),
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+
+
+def category_test_keyboard(
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Categorie",
+                    callback_data=(
+                        "autopost:categories"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏠 Home",
+                    callback_data=(
+                        "menu:home"
+                    ),
+                )
+            ],
+        ]
+    )
+
+
+def batch_result_keyboard(
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔄 Ripeti test",
                     callback_data=(
                         "autopost:demo_scan"
                     ),
@@ -240,9 +490,7 @@ def batch_result_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text=(
-                        "⬅️ Autoposting"
-                    ),
+                    text="⬅️ Autoposting",
                     callback_data=(
                         "menu:autopost"
                     ),
@@ -272,10 +520,8 @@ def batch_result_text(
             "— Batch Test</b>"
         ),
         "",
-        (
-            "🧪 Sorgente: "
-            "<b>LISTA DEMO</b>"
-        ),
+        "🧪 Sorgente: "
+        "<b>LISTA DEMO</b>",
         "",
         (
             f"🔎 Prodotti analizzati: "
@@ -317,15 +563,11 @@ def batch_result_text(
                 candidate.evaluation
             )
 
-            if index < len(
-                medals
-            ):
-                icon = medals[
-                    index
-                ]
-
-            else:
-                icon = "✅"
+            icon = (
+                medals[index]
+                if index < len(medals)
+                else "✅"
+            )
 
             lines.append(
                 (
@@ -366,9 +608,7 @@ def batch_result_text(
                 )
             )
 
-            lines.append(
-                ""
-            )
+            lines.append("")
 
     if result.rejected_candidates:
         lines.extend(
@@ -391,7 +631,7 @@ def batch_result_text(
 
             lines.append(
                 (
-                    f"❌ "
+                    "❌ "
                     f"<b>"
                     f"{escape(product.title)}"
                     f"</b>"
@@ -406,39 +646,17 @@ def batch_result_text(
             )
 
             if evaluation.blockers:
-                first_blocker = (
-                    evaluation.blockers[
-                        0
-                    ]
-                )
-
                 lines.append(
                     (
                         "↳ "
-                        f"{escape(first_blocker)}"
+                        f"{escape(
+                            evaluation
+                            .blockers[0]
+                        )}"
                     )
                 )
 
-            lines.append(
-                ""
-            )
-
-    lines.extend(
-        [
-            "────────────────",
-            "",
-            (
-                "ℹ️ Questa schermata "
-                "non pubblica nulla."
-            ),
-            (
-                "Serve a dimostrare che "
-                "il motore può ricevere "
-                "una lista di prodotti, "
-                "filtrarli e ordinarli."
-            ),
-        ]
-    )
+            lines.append("")
 
     return "\n".join(
         lines
@@ -446,7 +664,29 @@ def batch_result_text(
 
 
 # =========================================================
-# MENU AUTOPOST
+# STATE HELPERS
+# =========================================================
+
+
+async def get_config_channel_id(
+    state: FSMContext,
+) -> int | None:
+    data = await state.get_data()
+
+    value = data.get(
+        "autopost_channel_id"
+    )
+
+    if value is None:
+        return None
+
+    return int(
+        value
+    )
+
+
+# =========================================================
+# AUTOPOST MENU
 # =========================================================
 
 
@@ -467,14 +707,12 @@ async def autopost_menu(
             "<b>ATTIVO</b>\n"
             "📦 Batch Engine: "
             "<b>ATTIVO</b>\n"
+            "🗂 Categorie: "
+            "<b>ATTIVE</b>\n"
             "🔎 Provider offerte: "
             "<b>DEMO</b>\n"
-            "📤 Pubblicazione automatica: "
-            "<b>NON ATTIVA</b>"
-            "\n\n"
-            "Per la Fase 8C possiamo "
-            "simulare la scansione di "
-            "una lista di prodotti.",
+            "📤 Auto-pubblicazione: "
+            "<b>NON ATTIVA</b>",
             reply_markup=(
                 autopost_menu_keyboard()
             ),
@@ -484,7 +722,554 @@ async def autopost_menu(
 
 
 # =========================================================
-# DEMO SCAN
+# SELEZIONE CANALE
+# =========================================================
+
+
+@router.callback_query(
+    F.data == "autopost:channels"
+)
+async def autopost_channels(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    settings = get_settings()
+
+    channels = await list_channels(
+        settings.admin_user_id
+    )
+
+    if not channels:
+        await query.answer(
+            "Nessun canale collegato.",
+            show_alert=True,
+        )
+
+        return
+
+    if query.message is not None:
+        await query.message.edit_text(
+            "⚙️ <b>Configura "
+            "Autoposting</b>"
+            "\n\n"
+            "Scegli il canale:",
+            reply_markup=(
+                channel_selection_keyboard(
+                    channels
+                )
+            ),
+        )
+
+    await query.answer()
+
+
+@router.callback_query(
+    F.data.startswith(
+        "autopost:channel:"
+    )
+)
+async def autopost_select_channel(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if query.data is None:
+        return
+
+    settings = get_settings()
+
+    channel_id = int(
+        query.data.split(":")[-1]
+    )
+
+    channel = await get_channel(
+        channel_id,
+        settings.admin_user_id,
+    )
+
+    if channel is None:
+        await query.answer(
+            "Canale non trovato.",
+            show_alert=True,
+        )
+
+        return
+
+    config = (
+        await get_or_create_autopost_config(
+            settings.admin_user_id,
+            channel.id,
+        )
+    )
+
+    selected = (
+        get_selected_categories(
+            config
+        )
+    )
+
+    await state.update_data(
+        autopost_channel_id=(
+            channel.id
+        )
+    )
+
+    if query.message is not None:
+        await query.message.edit_text(
+            "⚙️ <b>Configurazione "
+            "Autoposting</b>"
+            "\n\n"
+            f"📢 Canale: "
+            f"<b>{escape(channel.title)}</b>"
+            "\n\n"
+            f"🗂 Categorie:\n"
+            f"<b>"
+            f"{escape(
+                categories_summary(
+                    selected
+                )
+            )}"
+            f"</b>"
+            "\n\n"
+            "Scegli cosa configurare:",
+            reply_markup=(
+                channel_config_keyboard()
+            ),
+        )
+
+    await query.answer()
+
+
+@router.callback_query(
+    F.data == "autopost:config_back"
+)
+async def autopost_config_back(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    settings = get_settings()
+
+    channel_id = (
+        await get_config_channel_id(
+            state
+        )
+    )
+
+    if channel_id is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+
+        return
+
+    channel = await get_channel(
+        channel_id,
+        settings.admin_user_id,
+    )
+
+    if channel is None:
+        await query.answer(
+            "Canale non trovato.",
+            show_alert=True,
+        )
+
+        return
+
+    config = (
+        await get_or_create_autopost_config(
+            settings.admin_user_id,
+            channel.id,
+        )
+    )
+
+    selected = (
+        get_selected_categories(
+            config
+        )
+    )
+
+    if query.message is not None:
+        await query.message.edit_text(
+            "⚙️ <b>Configurazione "
+            "Autoposting</b>"
+            "\n\n"
+            f"📢 Canale: "
+            f"<b>{escape(channel.title)}</b>"
+            "\n\n"
+            f"🗂 Categorie:\n"
+            f"<b>"
+            f"{escape(
+                categories_summary(
+                    selected
+                )
+            )}"
+            f"</b>",
+            reply_markup=(
+                channel_config_keyboard()
+            ),
+        )
+
+    await query.answer()
+
+
+# =========================================================
+# CATEGORIE
+# =========================================================
+
+
+@router.callback_query(
+    F.data == "autopost:categories"
+)
+async def autopost_categories(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    settings = get_settings()
+
+    channel_id = (
+        await get_config_channel_id(
+            state
+        )
+    )
+
+    if channel_id is None:
+        await query.answer(
+            "Seleziona prima un canale.",
+            show_alert=True,
+        )
+
+        return
+
+    channel = await get_channel(
+        channel_id,
+        settings.admin_user_id,
+    )
+
+    if channel is None:
+        await query.answer(
+            "Canale non trovato.",
+            show_alert=True,
+        )
+
+        return
+
+    config = (
+        await get_or_create_autopost_config(
+            settings.admin_user_id,
+            channel.id,
+        )
+    )
+
+    selected = (
+        get_selected_categories(
+            config
+        )
+    )
+
+    if query.message is not None:
+        await query.message.edit_text(
+            "🗂 <b>Categorie "
+            "Autoposting</b>"
+            "\n\n"
+            f"📢 "
+            f"<b>{escape(channel.title)}</b>"
+            "\n\n"
+            "Seleziona una o più "
+            "categorie.\n\n"
+            "ℹ️ Se scegli "
+            "<b>Tutte le categorie</b>, "
+            "nessun filtro categoria "
+            "verrà applicato.",
+            reply_markup=(
+                categories_keyboard(
+                    selected
+                )
+            ),
+        )
+
+    await query.answer()
+
+
+@router.callback_query(
+    F.data == "autopost:category_all"
+)
+async def autopost_category_all(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    settings = get_settings()
+
+    channel_id = (
+        await get_config_channel_id(
+            state
+        )
+    )
+
+    if channel_id is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+
+        return
+
+    config = (
+        await set_selected_categories(
+            settings.admin_user_id,
+            channel_id,
+            (),
+        )
+    )
+
+    selected = (
+        get_selected_categories(
+            config
+        )
+    )
+
+    if query.message is not None:
+        await query.message.edit_reply_markup(
+            reply_markup=(
+                categories_keyboard(
+                    selected
+                )
+            )
+        )
+
+    await query.answer(
+        "Tutte le categorie."
+    )
+
+
+@router.callback_query(
+    F.data.startswith(
+        "autopost:category:"
+    )
+)
+async def autopost_toggle_category(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if query.data is None:
+        return
+
+    settings = get_settings()
+
+    channel_id = (
+        await get_config_channel_id(
+            state
+        )
+    )
+
+    if channel_id is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+
+        return
+
+    category_key = (
+        query.data.split(":")[-1]
+    )
+
+    config = (
+        await get_or_create_autopost_config(
+            settings.admin_user_id,
+            channel_id,
+        )
+    )
+
+    selected = list(
+        get_selected_categories(
+            config
+        )
+    )
+
+    if category_key in selected:
+        selected.remove(
+            category_key
+        )
+
+    else:
+        selected.append(
+            category_key
+        )
+
+    config = (
+        await set_selected_categories(
+            settings.admin_user_id,
+            channel_id,
+            selected,
+        )
+    )
+
+    selected_tuple = (
+        get_selected_categories(
+            config
+        )
+    )
+
+    if query.message is not None:
+        await query.message.edit_reply_markup(
+            reply_markup=(
+                categories_keyboard(
+                    selected_tuple
+                )
+            )
+        )
+
+    await query.answer(
+        "Categorie aggiornate."
+    )
+
+
+# =========================================================
+# TEST CATEGORIE
+# =========================================================
+
+
+@router.callback_query(
+    F.data == "autopost:category_test"
+)
+async def autopost_category_test(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    settings = get_settings()
+
+    channel_id = (
+        await get_config_channel_id(
+            state
+        )
+    )
+
+    if channel_id is None:
+        await query.answer(
+            "Sessione scaduta.",
+            show_alert=True,
+        )
+
+        return
+
+    channel = await get_channel(
+        channel_id,
+        settings.admin_user_id,
+    )
+
+    if channel is None:
+        await query.answer(
+            "Canale non trovato.",
+            show_alert=True,
+        )
+
+        return
+
+    config = (
+        await get_or_create_autopost_config(
+            settings.admin_user_id,
+            channel_id,
+        )
+    )
+
+    selected = (
+        get_selected_categories(
+            config
+        )
+    )
+
+    all_products = (
+        build_demo_products()
+    )
+
+    filtered_products = (
+        filter_products_by_categories(
+            all_products,
+            selected,
+        )
+    )
+
+    result = evaluate_products(
+        filtered_products
+    )
+
+    text = (
+        "🧪 <b>Test categorie</b>"
+        "\n\n"
+        f"📢 Canale: "
+        f"<b>{escape(channel.title)}</b>"
+        "\n\n"
+        f"🗂 Selezione:\n"
+        f"<b>"
+        f"{escape(
+            categories_summary(
+                selected
+            )
+        )}"
+        f"</b>"
+        "\n\n"
+        f"📦 Prodotti demo totali: "
+        f"<b>{len(all_products)}</b>"
+        "\n"
+        f"🔎 Dopo filtro categorie: "
+        f"<b>{len(filtered_products)}</b>"
+        "\n"
+        f"✅ Validati dal Deal Engine: "
+        f"<b>{result.valid_count}</b>"
+        "\n"
+        f"❌ Scartati dal Deal Engine: "
+        f"<b>{result.rejected_count}</b>"
+    )
+
+    if filtered_products:
+        text += (
+            "\n\n"
+            "📋 <b>Prodotti passati "
+            "al Deal Engine:</b>"
+        )
+
+        for product in (
+            filtered_products
+        ):
+            text += (
+                "\n• "
+                f"{escape(product.title)}"
+            )
+
+    if query.message is not None:
+        await query.message.edit_text(
+            text,
+            reply_markup=(
+                category_test_keyboard()
+            ),
+        )
+
+    await query.answer(
+        "Test completato."
+    )
+
+
+# =========================================================
+# FILTRI FUTURI
+# =========================================================
+
+
+@router.callback_query(
+    F.data
+    == "autopost:filters_future"
+)
+async def autopost_filters_future(
+    query: CallbackQuery,
+) -> None:
+    await query.answer(
+        "🎛 I filtri arrivano "
+        "nella Fase 9B.",
+        show_alert=True,
+    )
+
+
+# =========================================================
+# DEMO BATCH GENERALE
 # =========================================================
 
 
