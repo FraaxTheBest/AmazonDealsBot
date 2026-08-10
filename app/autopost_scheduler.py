@@ -15,6 +15,9 @@ from apscheduler.schedulers.asyncio import (
 from app.autopost_pipeline import (
     run_channel_autopost_pipeline,
 )
+from app.autopost_queue_store import (
+    enqueue_autopost_candidates,
+)
 from app.autopost_runtime_store import (
     get_or_create_runtime_config,
     list_enabled_autopost_channels,
@@ -46,7 +49,7 @@ def autopost_job_id(
 
 
 # =========================================================
-# SCAN
+# SINGOLA SCANSIONE
 # =========================================================
 
 
@@ -55,19 +58,26 @@ async def run_autopost_scan(
     channel_id: int,
 ) -> None:
     """
-    Esegue UNA scansione.
+    Esegue una scansione Autopost.
 
-    FASE 10B:
-    - trova prodotti DEMO
-    - esegue Pipeline 9
-    - limita candidati
-    - scrive risultato nei log
+    FASE 10C:
 
-    NON pubblica.
-    NON salva ancora candidati.
+    provider DEMO
+        ↓
+    Pipeline Fase 9
+        ↓
+    limite candidati
+        ↓
+    CODA PERSISTENTE
+
+    NON pubblica ancora nulla.
     """
 
     try:
+        # =================================================
+        # CONFIG AUTOPOST
+        # =================================================
+
         autopost_config = (
             await get_or_create_autopost_config(
                 owner_telegram_user_id,
@@ -75,15 +85,12 @@ async def run_autopost_scan(
             )
         )
 
-        #
-        # Se nel frattempo l'admin
-        # ha spento Autoposting,
-        # non facciamo nulla.
-        #
         if not autopost_config.is_enabled:
             logging.info(
-                "Autopost scan ignorato "
-                "per canale %s: OFF.",
+                (
+                    "Autopost scan ignorato | "
+                    "channel=%s | OFF"
+                ),
                 channel_id,
             )
 
@@ -96,17 +103,22 @@ async def run_autopost_scan(
             )
         )
 
-        # ================================================
-        # PROVIDER DEMO
-        # ================================================
+        # =================================================
+        # PROVIDER
+        #
+        # Per ora DEMO.
+        # Verrà sostituito dal provider
+        # Amazon reale quando avremo
+        # Creators API.
+        # =================================================
 
         products = (
             build_demo_products()
         )
 
-        # ================================================
-        # PIPELINE FASE 9
-        # ================================================
+        # =================================================
+        # PIPELINE COMPLETA FASE 9
+        # =================================================
 
         result = (
             await run_channel_autopost_pipeline(
@@ -118,10 +130,10 @@ async def run_autopost_scan(
             )
         )
 
-        #
-        # Applichiamo il limite
-        # configurato nella 10A.
-        #
+        # =================================================
+        # LIMITE FASE 10A
+        # =================================================
+
         candidates = (
             result.final_candidates[
                 :int(
@@ -130,6 +142,25 @@ async def run_autopost_scan(
                 )
             ]
         )
+
+        # =================================================
+        # CODA PERSISTENTE FASE 10C
+        # =================================================
+
+        queue_result = (
+            await enqueue_autopost_candidates(
+                owner_telegram_user_id=(
+                    owner_telegram_user_id
+                ),
+                channel_id=channel_id,
+                candidates=candidates,
+                source="demo",
+            )
+        )
+
+        # =================================================
+        # LOG SCANSIONE
+        # =================================================
 
         logging.info(
             (
@@ -141,7 +172,11 @@ async def run_autopost_scan(
                 "deals=%s | "
                 "duplicates=%s | "
                 "final=%s | "
-                "selected=%s"
+                "selected=%s | "
+                "queue_new=%s | "
+                "queue_refreshed=%s | "
+                "queue_skipped=%s | "
+                "pending_total=%s"
             ),
             channel_id,
             result.source_count,
@@ -151,7 +186,15 @@ async def run_autopost_scan(
             result.duplicate_count,
             result.final_count,
             len(candidates),
+            queue_result.created_count,
+            queue_result.refreshed_count,
+            queue_result.skipped_active_count,
+            queue_result.pending_total,
         )
+
+        # =================================================
+        # LOG CANDIDATI
+        # =================================================
 
         for index, candidate in enumerate(
             candidates,
@@ -175,82 +218,16 @@ async def run_autopost_scan(
 
     except Exception:
         logging.exception(
-            "Errore Autopost scan "
-            "canale %s.",
+            (
+                "Errore Autopost scan "
+                "canale %s."
+            ),
             channel_id,
         )
 
 
 # =========================================================
-# CREA / AGGIORNA JOB
-# =========================================================
-
-
-def schedule_autopost_channel(
-    owner_telegram_user_id: int,
-    channel_id: int,
-    interval_minutes: int,
-) -> None:
-    if _scheduler is None:
-        raise RuntimeError(
-            "Autopost Scheduler "
-            "non avviato."
-        )
-
-    _scheduler.add_job(
-        run_autopost_scan,
-        trigger="interval",
-        minutes=int(
-            interval_minutes
-        ),
-        args=[
-            owner_telegram_user_id,
-            channel_id,
-        ],
-        id=autopost_job_id(
-            channel_id
-        ),
-        replace_existing=True,
-
-        #
-        # Esegue subito una prima
-        # scansione all'avvio.
-        #
-        next_run_time=None,
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=300,
-    )
-
-    #
-    # add_job con next_run_time=None
-    # crea il job inizialmente pausato.
-    #
-    # Lo riattiviamo e impostiamo
-    # la prima esecuzione immediata.
-    #
-    job = _scheduler.get_job(
-        autopost_job_id(
-            channel_id
-        )
-    )
-
-    if job is not None:
-        job.resume()
-
-    logging.info(
-        (
-            "Autopost job registrato | "
-            "channel=%s | "
-            "interval=%s min"
-        ),
-        channel_id,
-        interval_minutes,
-    )
-
-
-# =========================================================
-# VERSIONE SICURA CON PRIMA SCANSIONE
+# REGISTRA JOB
 # =========================================================
 
 
@@ -261,10 +238,8 @@ async def register_autopost_channel(
     run_now: bool = True,
 ) -> None:
     """
-    Registra il job periodico.
-
-    Se run_now=True fa anche
-    una scansione immediata.
+    Registra o aggiorna
+    il job periodico.
     """
 
     if _scheduler is None:
@@ -331,14 +306,16 @@ def remove_autopost_channel(
         pass
 
     logging.info(
-        "Autopost job rimosso | "
-        "channel=%s",
+        (
+            "Autopost job rimosso | "
+            "channel=%s"
+        ),
         channel_id,
     )
 
 
 # =========================================================
-# REFRESH SINGOLO CANALE
+# REFRESH CANALE
 # =========================================================
 
 
@@ -347,8 +324,10 @@ async def refresh_autopost_channel(
     channel_id: int,
 ) -> None:
     """
-    Chiamata quando l'admin:
-    - attiva/disattiva autopost
+    Aggiorna lo scheduler quando:
+
+    - Autopost ON
+    - Autopost OFF
     - cambia intervallo scansione
     """
 
