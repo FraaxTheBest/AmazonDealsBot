@@ -419,6 +419,10 @@ async def runtime_menu(
     F.data
     == "autopost:runtime_toggle"
 )
+@router.callback_query(
+    F.data
+    == "autopost:runtime_toggle"
+)
 async def runtime_toggle(
     query: CallbackQuery,
     state: FSMContext,
@@ -477,6 +481,18 @@ async def runtime_toggle(
         updated.is_enabled
     )
 
+    if enabled:
+        scheduler_status = (
+            "🔄 Scheduler Autoposting "
+            "<b>ATTIVO</b>."
+        )
+
+    else:
+        scheduler_status = (
+            "⏸ Scheduler Autoposting "
+            "<b>DISATTIVATO</b>."
+        )
+
     if query.message is not None:
         await query.message.edit_text(
             "⚡ <b>Configurazione "
@@ -489,14 +505,7 @@ async def runtime_toggle(
             "\n\n"
             "✅ Configurazione salvata."
             "\n\n"
-            (
-                "🔄 Scheduler Autoposting "
-                "<b>ATTIVO</b>."
-                if enabled
-                else
-                "⏸ Scheduler Autoposting "
-                "<b>DISATTIVATO</b>."
-            ),
+            f"{scheduler_status}",
             reply_markup=(
                 runtime_keyboard(
                     enabled
@@ -511,7 +520,6 @@ async def runtime_toggle(
             else "Autoposting OFF."
         )
     )
-
 
 # =========================================================
 # MODIFICA CAMPO
