@@ -580,6 +580,16 @@ def channel_config_keyboard(
             ],
             [
                 InlineKeyboardButton(
+                    text=(
+                        "📥 Coda approvazione"
+                    ),
+                    callback_data=(
+                        "autopost:queue"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🗂 Categorie",
                     callback_data=(
                         "autopost:categories"
