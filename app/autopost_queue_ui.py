@@ -574,10 +574,6 @@ async def queue_reject(
         )
     )
 
-    await query.answer(
-        "Candidato scartato."
-    )
-
     await show_pending(
         query,
         state,
@@ -622,10 +618,6 @@ async def queue_restore(
         )
 
         return
-
-    await query.answer(
-        "Candidato riportato in attesa."
-    )
 
     await show_pending(
         query,

@@ -20,6 +20,11 @@ from app.affiliate import (
     affiliate_admin_text,
     apply_affiliate_link,
 )
+from app.affiliate_store import get_effective_partner_tag
+from app.ai_service import enhance_product_with_ai
+from app.amazon.provider_factory import get_product_for_channel
+from app.dedupe_store import record_publication
+from app.shortlink_service import build_offer_url
 from app.amazon.models import (
     ProductSnapshot,
 )
@@ -280,6 +285,12 @@ def preview_keyboard(
             ],
             [
                 InlineKeyboardButton(
+                    text="📝 SALVA BOZZA",
+                    callback_data="post:save_draft",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text=(
                         "✅ PUBBLICA ORA"
                     ),
@@ -324,17 +335,14 @@ def preview_keyboard(
 
 def published_keyboard(
     product: ProductSnapshot,
+    url: str | None = None,
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=(
-                        "Vedi offerta 👀"
-                    ),
-                    url=get_public_url(
-                        product
-                    ),
+                    text="Vedi offerta 👀",
+                    url=(url or get_public_url(product)),
                 )
             ]
         ]
@@ -443,7 +451,7 @@ def product_preview_text(
 ) -> str:
     return (
         "🧪 <b>ANTEPRIMA POST</b>\n"
-        "⚠️ Dati prodotto ancora MOCK."
+        "ℹ️ Dati dal provider Amazon configurato."
         "\n\n"
         "────────────────\n\n"
         f"{rendered_post}"
@@ -852,19 +860,25 @@ async def receive_product(
         return
 
     #
-    # 1. Recuperiamo prodotto
+    # 1. Recuperiamo prodotto dal provider configurato
+    #    usando il canale selezionato.
     #
-    product = (
-        await amazon_provider
-        .get_product(
-            asin
-        )
+    settings = get_settings()
+    state_data = await state.get_data()
+    selected_channel_id = state_data.get("channel_id")
+    if selected_channel_id is None:
+        await message.answer("❌ Sessione scaduta. Seleziona di nuovo il canale.")
+        return
+
+    product = await get_product_for_channel(
+        asin=asin,
+        owner_telegram_user_id=settings.admin_user_id,
+        channel_id=int(selected_channel_id),
     )
 
     #
     # 2. Affiliate Engine
     #
-    settings = get_settings()
 
     product, affiliate_decision = (
         await apply_affiliate_link(
@@ -873,7 +887,10 @@ async def receive_product(
                 submitted_value
             ),
             expected_partner_tag=(
-                settings.amazon_partner_tag
+                await get_effective_partner_tag(
+                    settings.admin_user_id,
+                    int(selected_channel_id),
+                )
             ),
         )
     )
@@ -1511,6 +1528,16 @@ async def publish_post(
 
         return
 
+    # AI opzionale: in caso di errore continuiamo con il prodotto originale.
+    try:
+        ai_result = await enhance_product_with_ai(
+            settings.admin_user_id,
+            product,
+        )
+        product = ai_result.product
+    except Exception:
+        pass
+
     rendered_post = (
         await render_saved_template(
             product
@@ -1526,13 +1553,21 @@ async def publish_post(
     # È informazione solo per
     # l'amministratore.
     #
-    post_text = (
-        rendered_post
-        + "\n\n"
-        "⚠️ <i>Dati demo: "
-        "provider Amazon reale "
-        "non ancora collegato.</i>"
-    )
+    post_text = rendered_post
+    if settings.amazon_provider == "demo":
+        post_text += (
+            "\n\n⚠️ <i>Dati demo: provider Amazon reale "
+            "non ancora collegato.</i>"
+        )
+
+    try:
+        public_url = await build_offer_url(
+            owner_telegram_user_id=settings.admin_user_id,
+            channel_id=channel.id,
+            product=product,
+        )
+    except Exception:
+        public_url = get_public_url(product)
 
     if (
         product.image_url
@@ -1549,7 +1584,7 @@ async def publish_post(
         return
 
     try:
-        await send_product_post(
+        sent_message = await send_product_post(
             bot=bot,
             chat_id=(
                 channel.telegram_chat_id
@@ -1558,7 +1593,8 @@ async def publish_post(
             text=post_text,
             reply_markup=(
                 published_keyboard(
-                    product
+                    product,
+                    public_url,
                 )
             ),
         )
@@ -1570,6 +1606,17 @@ async def publish_post(
         )
 
         return
+
+    try:
+        await record_publication(
+            owner_telegram_user_id=settings.admin_user_id,
+            channel_id=channel.id,
+            product=product,
+            source="manual",
+            telegram_message_id=sent_message.message_id,
+        )
+    except Exception:
+        pass
 
     await state.clear()
 

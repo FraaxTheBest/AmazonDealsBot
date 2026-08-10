@@ -52,6 +52,9 @@ PUBLISH_SLOTS = "slots"
 
 BLACKLIST_BRAND = "brand"
 BLACKLIST_SELLER = "seller"
+BLACKLIST_MANUFACTURER = "manufacturer"
+BLACKLIST_ASIN = "asin"
+BLACKLIST_KEYWORD = "keyword"
 
 SUPPORTED_MODES = {
     MODE_APPROVAL,
@@ -72,6 +75,9 @@ SUPPORTED_PUBLISH_STRATEGIES = {
 SUPPORTED_BLACKLIST_KINDS = {
     BLACKLIST_BRAND,
     BLACKLIST_SELLER,
+    BLACKLIST_MANUFACTURER,
+    BLACKLIST_ASIN,
+    BLACKLIST_KEYWORD,
 }
 
 
@@ -416,6 +422,9 @@ class DailyPublicationCounts:
 class BlacklistSets:
     brands: frozenset[str]
     sellers: frozenset[str]
+    manufacturers: frozenset[str]
+    asins: frozenset[str]
+    keywords: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -891,10 +900,28 @@ async def get_blacklist_sets(
         for entry in entries
         if entry.kind == BLACKLIST_SELLER
     }
+    manufacturers = {
+        entry.value_normalized
+        for entry in entries
+        if entry.kind == BLACKLIST_MANUFACTURER
+    }
+    asins = {
+        entry.value_normalized.upper()
+        for entry in entries
+        if entry.kind == BLACKLIST_ASIN
+    }
+    keywords = {
+        entry.value_normalized
+        for entry in entries
+        if entry.kind == BLACKLIST_KEYWORD
+    }
 
     return BlacklistSets(
         brands=frozenset(brands),
         sellers=frozenset(sellers),
+        manufacturers=frozenset(manufacturers),
+        asins=frozenset(asins),
+        keywords=frozenset(keywords),
     )
 
 

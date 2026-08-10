@@ -27,11 +27,26 @@ from app.autopost_runtime_store import (
 )
 from app.autopost_store import get_or_create_autopost_config
 from app.config import get_settings
+from app.analytics_store import record_audit_event, record_autopost_scan
+from app.notification_service import notify_admin_error
 
 
 _scheduler: AsyncIOScheduler | None = None
 _bot: Bot | None = None
 _job_signatures: dict[int, tuple] = {}
+
+
+def autopost_scheduler_running() -> bool:
+    return _scheduler is not None and bool(getattr(_scheduler, "running", False))
+
+
+def autopost_job_count() -> int:
+    if _scheduler is None:
+        return 0
+    try:
+        return len(_scheduler.get_jobs())
+    except Exception:
+        return 0
 
 
 def scan_job_id(channel_id: int) -> str:
@@ -93,7 +108,7 @@ async def run_autopost_scan(
 
         logging.info(
             (
-                "AUTOPOST 11 SCAN | channel=%s | source=%s | "
+                "AUTOPOST 11 SCAN | channel=%s | provider=%s | source=%s | "
                 "category=%s | filters=%s | deals=%s | dedupe=%s | "
                 "advanced_in=%s | blacklist_rejected=%s | "
                 "limit_rejected=%s | failed_rejected=%s | "
@@ -101,6 +116,7 @@ async def run_autopost_scan(
                 "pending=%s | event=%s"
             ),
             channel_id,
+            result.provider_name,
             result.pipeline.source_count,
             result.pipeline.category_passed_count,
             result.pipeline.filter_passed_count,
@@ -116,6 +132,26 @@ async def run_autopost_scan(
             result.queue.pending_total,
             result.event_active,
         )
+
+        try:
+            await record_autopost_scan(
+                owner_telegram_user_id=owner_telegram_user_id,
+                channel_id=channel_id,
+                provider=result.provider_name,
+                source_count=result.pipeline.source_count,
+                category_passed_count=result.pipeline.category_passed_count,
+                filter_passed_count=result.pipeline.filter_passed_count,
+                deal_valid_count=result.pipeline.deal_valid_count,
+                duplicate_count=result.pipeline.duplicate_count,
+                blacklist_rejected_count=result.ranking.blacklist_rejected_count,
+                limit_rejected_count=result.ranking.limit_rejected_count,
+                failed_rejected_count=result.ranking.failed_rejected_count,
+                selected_count=result.selected_count,
+                queue_new_count=result.queue.created_count,
+                event_active=result.event_active,
+            )
+        except Exception:
+            logging.exception("Metriche scansione non registrate | channel=%s", channel_id)
 
         for index, ranked in enumerate(
             result.ranking.ranked[: result.selected_count],
@@ -135,11 +171,22 @@ async def run_autopost_scan(
                 ranked.offer_type,
             )
 
-    except Exception:
+    except Exception as exc:
         logging.exception(
             "Errore scansione Autopost Fase 11 | channel=%s",
             channel_id,
         )
+        try:
+            await record_audit_event(
+                action="autopost_scan_error",
+                owner_telegram_user_id=owner_telegram_user_id,
+                channel_id=channel_id,
+                level="error",
+                details={"error": str(exc)[:500]},
+            )
+        except Exception:
+            pass
+        await notify_admin_error(_bot, f"autopost_scan:{channel_id}", f"Scansione Autopost fallita sul canale {channel_id}: {exc}")
 
 
 async def run_autopost_publish(
@@ -164,11 +211,12 @@ async def run_autopost_publish(
             outcome.candidate_id,
         )
 
-    except Exception:
+    except Exception as exc:
         logging.exception(
             "Errore publisher Autopost Fase 11 | channel=%s",
             channel_id,
         )
+        await notify_admin_error(_bot, f"autopost_publish:{channel_id}", f"Publisher Autopost fallito sul canale {channel_id}: {exc}")
 
 
 async def _channel_signature(

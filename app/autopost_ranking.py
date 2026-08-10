@@ -200,16 +200,26 @@ def _passes_blacklist(
     product,
     brand_blacklist: frozenset[str],
     seller_blacklist: frozenset[str],
+    manufacturer_blacklist: frozenset[str],
+    asin_blacklist: frozenset[str],
+    keyword_blacklist: frozenset[str],
 ) -> bool:
     brand = normalize_text(product.brand)
     seller = normalize_text(product.seller)
+    manufacturer = normalize_text(getattr(product, "manufacturer", None))
+    asin = (product.asin or "").strip().upper()
+    title = normalize_text(product.title)
 
     if brand and brand in brand_blacklist:
         return False
-
     if seller and seller in seller_blacklist:
         return False
-
+    if manufacturer and manufacturer in manufacturer_blacklist:
+        return False
+    if asin and asin in asin_blacklist:
+        return False
+    if title and any(keyword in title for keyword in keyword_blacklist if keyword):
+        return False
     return True
 
 
@@ -416,6 +426,9 @@ async def rank_deal_candidates(
             product,
             blacklist.brands,
             blacklist.sellers,
+            blacklist.manufacturers,
+            blacklist.asins,
+            blacklist.keywords,
         ):
             blacklist_rejected += 1
             continue
@@ -516,6 +529,9 @@ async def rank_queue_candidates(
             product,
             blacklist.brands,
             blacklist.sellers,
+            blacklist.manufacturers,
+            blacklist.asins,
+            blacklist.keywords,
         ):
             blacklist_rejected += 1
             continue

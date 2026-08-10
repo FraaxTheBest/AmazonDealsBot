@@ -452,7 +452,7 @@ def evaluate_deal(
         )
     )
 
-    score = (
+    raw_score = (
         score_discount
         + score_savings
         + score_rating
@@ -461,12 +461,31 @@ def evaluate_deal(
         + score_fulfillment
     )
 
-    # Protezione futura:
-    # lo score non supera mai 100.
-    score = min(
-        max(score, 0),
-        100,
-    )
+    # Alcuni provider ufficiali non espongono tutte le componenti (es.
+    # rating/numero recensioni/fulfillment). Non inventiamo dati e non
+    # penalizziamo automaticamente un'offerta soltanto per un campo che il
+    # provider non può restituire. Normalizziamo lo score sul massimo delle
+    # componenti effettivamente osservabili. Con il provider DEMO, che ha
+    # tutti i dati, il risultato rimane identico alle fasi precedenti.
+    available_max = 50  # sconto: componente sempre richiesta dal Deal Engine
+
+    if savings is not None:
+        available_max += 10
+    if product.rating is not None:
+        available_max += 15
+    if product.reviews_count is not None:
+        available_max += 10
+    if product.availability:
+        available_max += 10
+    if product.ships_from is not None:
+        available_max += 5
+
+    if available_max > 0 and available_max < 100:
+        score = int(round(raw_score * 100 / available_max))
+    else:
+        score = raw_score
+
+    score = min(max(score, 0), 100)
 
     # -----------------------------------------------------
     # MOTIVAZIONI
@@ -519,6 +538,11 @@ def evaluate_deal(
                 "Gestione Amazon "
                 f"(+{score_fulfillment} punti)"
             )
+        )
+
+    if available_max < 100:
+        reasons.append(
+            f"Score adattato ai dati disponibili ({available_max}/100 componenti osservabili)."
         )
 
     # -----------------------------------------------------

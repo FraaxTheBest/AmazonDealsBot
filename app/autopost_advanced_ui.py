@@ -15,6 +15,9 @@ from aiogram.types import (
 from app.autopost_advanced_store import (
     BLACKLIST_BRAND,
     BLACKLIST_SELLER,
+    BLACKLIST_MANUFACTURER,
+    BLACKLIST_ASIN,
+    BLACKLIST_KEYWORD,
     MODE_APPROVAL,
     MODE_AUTOMATIC,
     PUBLISH_INTERVAL,
@@ -678,17 +681,23 @@ async def blacklist_menu(query: CallbackQuery, state: FSMContext) -> None:
     entries = await list_blacklist_entries(settings.admin_user_id, channel_id)
     lines = ["🚫 <b>Blacklist</b>", ""]
     if not entries:
-        lines.append("Nessun brand o venditore escluso.")
+        lines.append("Nessun elemento escluso.")
     else:
         for entry in entries[:20]:
-            icon = "🏷" if entry.kind == BLACKLIST_BRAND else "🏪"
+            icons = {BLACKLIST_BRAND: "🏷", BLACKLIST_SELLER: "🏪", BLACKLIST_MANUFACTURER: "🏭", BLACKLIST_ASIN: "🔢", BLACKLIST_KEYWORD: "🔤"}
+            icon = icons.get(entry.kind, "🚫")
             lines.append(f"{icon} #{entry.id} {escape(entry.value_display)}")
 
     rows = [
         [
             InlineKeyboardButton(text="➕ Brand", callback_data="autopost:adv_black_add:brand"),
             InlineKeyboardButton(text="➕ Venditore", callback_data="autopost:adv_black_add:seller"),
-        ]
+        ],
+        [InlineKeyboardButton(text="➕ Produttore", callback_data="autopost:adv_black_add:manufacturer")],
+        [
+            InlineKeyboardButton(text="➕ ASIN", callback_data="autopost:adv_black_add:asin"),
+            InlineKeyboardButton(text="➕ Parola", callback_data="autopost:adv_black_add:keyword"),
+        ],
     ]
     for entry in entries[:12]:
         rows.append([
@@ -712,13 +721,13 @@ async def blacklist_add_prompt(query: CallbackQuery, state: FSMContext) -> None:
     if query.data is None:
         return
     kind = query.data.rsplit(":", 1)[-1]
-    if kind not in {BLACKLIST_BRAND, BLACKLIST_SELLER}:
+    if kind not in {BLACKLIST_BRAND, BLACKLIST_SELLER, BLACKLIST_MANUFACTURER, BLACKLIST_ASIN, BLACKLIST_KEYWORD}:
         return
     await state.update_data(autopost_adv_black_kind=kind)
     await state.set_state(AdvancedStates.waiting_blacklist)
     if query.message is not None:
         await query.message.edit_text(
-            "🚫 Invia il nome esatto del brand o venditore da escludere."
+            "🚫 Invia il valore da escludere (brand, venditore, produttore, ASIN o parola chiave)."
         )
     await query.answer()
 
@@ -729,7 +738,7 @@ async def blacklist_add_receive(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     channel_id = data.get("autopost_channel_id")
     kind = data.get("autopost_adv_black_kind")
-    if channel_id is None or kind not in {BLACKLIST_BRAND, BLACKLIST_SELLER} or not message.text:
+    if channel_id is None or kind not in {BLACKLIST_BRAND, BLACKLIST_SELLER, BLACKLIST_MANUFACTURER, BLACKLIST_ASIN, BLACKLIST_KEYWORD} or not message.text:
         await state.set_state(None)
         return
     try:

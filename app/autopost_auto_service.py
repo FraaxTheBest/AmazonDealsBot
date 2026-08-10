@@ -1,10 +1,10 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 
+from app.amazon.provider_factory import get_channel_products
 from app.autopost_advanced_store import (
     MODE_AUTOMATIC,
     effective_max_posts_per_day,
@@ -15,14 +15,8 @@ from app.autopost_advanced_store import (
     mark_candidate_failed,
     record_publish_attempt,
 )
-from app.autopost_pipeline import (
-    FullAutopostPipelineResult,
-    run_channel_autopost_pipeline,
-)
-from app.autopost_publish_service import (
-    AutopostPublishResult,
-    publish_approved_candidate,
-)
+from app.autopost_pipeline import FullAutopostPipelineResult, run_channel_autopost_pipeline
+from app.autopost_publish_service import AutopostPublishResult, publish_approved_candidate
 from app.autopost_queue_store import (
     STATUS_APPROVED,
     STATUS_PENDING,
@@ -36,13 +30,8 @@ from app.autopost_ranking import (
     rank_deal_candidates,
     rank_queue_candidates,
 )
-from app.autopost_runtime_store import (
-    get_or_create_runtime_config,
-)
-from app.autopost_store import (
-    get_or_create_autopost_config,
-)
-from app.autoposting import build_demo_products
+from app.autopost_runtime_store import get_or_create_runtime_config
+from app.autopost_store import get_or_create_autopost_config
 
 
 _publish_locks: dict[int, asyncio.Lock] = {}
@@ -55,6 +44,7 @@ class AdvancedScanResult:
     queue: QueueSaveResult
     selected_count: int
     event_active: bool
+    provider_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +52,7 @@ class LiveRankingSnapshot:
     pipeline: FullAutopostPipelineResult
     ranking: AdvancedRankingResult
     event_active: bool
+    provider_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,99 +71,48 @@ def _lock_for_channel(channel_id: int) -> asyncio.Lock:
     return lock
 
 
-def _phase11_demo_products():
-    """
-    Aggiunge metadati esclusivamente ai prodotti DEMO.
-    Non inferisce mai tipologie di offerte reali.
-    """
-    now = datetime.now(timezone.utc)
-    products = _phase11_demo_products()
-    result = []
-
-    for index, product in enumerate(products):
-        updates = {
-            "source_updated_at": now - timedelta(minutes=index * 3)
-        }
-
-        if product.asin == "B0DEMO0001":
-            updates["offer_type"] = "lightning"
-        elif product.asin == "B0DEMO0002":
-            updates["offer_type"] = "coupon"
-        else:
-            updates["offer_type"] = "normal"
-
-        result.append(product.model_copy(update=updates))
-
-    return result
-
-
-async def live_ranking_snapshot(
-    owner_telegram_user_id: int,
-    channel_id: int,
-) -> LiveRankingSnapshot:
-    products = build_demo_products()
+async def live_ranking_snapshot(owner_telegram_user_id: int, channel_id: int) -> LiveRankingSnapshot:
+    batch = await get_channel_products(owner_telegram_user_id, channel_id)
     pipeline = await run_channel_autopost_pipeline(
         owner_telegram_user_id=owner_telegram_user_id,
         channel_id=channel_id,
-        products=products,
+        products=batch.products,
     )
-
-    advanced = await get_or_create_advanced_config(
-        owner_telegram_user_id,
-        channel_id,
-    )
+    advanced = await get_or_create_advanced_config(owner_telegram_user_id, channel_id)
     event = event_status(advanced)
     max_posts = effective_max_posts_per_day(advanced)
-
     ranking = await rank_deal_candidates(
         owner_telegram_user_id,
         channel_id,
         pipeline.final_candidates,
         max_posts_override=max_posts,
     )
-
     return LiveRankingSnapshot(
         pipeline=pipeline,
         ranking=ranking,
         event_active=event.active,
+        provider_name=batch.provider_name,
     )
 
 
-async def run_advanced_scan(
-    owner_telegram_user_id: int,
-    channel_id: int,
-) -> AdvancedScanResult:
-    runtime = await get_or_create_runtime_config(
-        owner_telegram_user_id,
-        channel_id,
-    )
-
-    snapshot = await live_ranking_snapshot(
-        owner_telegram_user_id,
-        channel_id,
-    )
-
-    selected_ranked = snapshot.ranking.ranked[
-        : int(runtime.max_candidates_per_scan)
-    ]
-    selected_candidates = tuple(
-        item.candidate
-        for item in selected_ranked
-    )
-
+async def run_advanced_scan(owner_telegram_user_id: int, channel_id: int) -> AdvancedScanResult:
+    runtime = await get_or_create_runtime_config(owner_telegram_user_id, channel_id)
+    snapshot = await live_ranking_snapshot(owner_telegram_user_id, channel_id)
+    selected_ranked = snapshot.ranking.ranked[: int(runtime.max_candidates_per_scan)]
+    selected_candidates = tuple(item.candidate for item in selected_ranked)
     queue_result = await enqueue_autopost_candidates(
         owner_telegram_user_id=owner_telegram_user_id,
         channel_id=channel_id,
         candidates=selected_candidates,
-        source="demo",
+        source=snapshot.provider_name,
     )
-
     return AdvancedScanResult(
         pipeline=snapshot.pipeline,
         ranking=snapshot.ranking,
         queue=queue_result,
         selected_count=len(selected_candidates),
         event_active=snapshot.event_active,
+        provider_name=snapshot.provider_name,
     )
 
 
@@ -182,30 +122,19 @@ async def automatic_publish_once(
     channel_id: int,
 ) -> AutomaticPublishOutcome:
     lock = _lock_for_channel(channel_id)
-
     if lock.locked():
         return AutomaticPublishOutcome(status="busy")
 
     async with lock:
-        autopost = await get_or_create_autopost_config(
-            owner_telegram_user_id,
-            channel_id,
-        )
+        autopost = await get_or_create_autopost_config(owner_telegram_user_id, channel_id)
         if not autopost.is_enabled:
             return AutomaticPublishOutcome(status="disabled")
 
-        advanced = await get_or_create_advanced_config(
-            owner_telegram_user_id,
-            channel_id,
-        )
+        advanced = await get_or_create_advanced_config(owner_telegram_user_id, channel_id)
         if advanced.mode != MODE_AUTOMATIC:
             return AutomaticPublishOutcome(status="approval_mode")
 
-        candidates = await list_publishable_candidates(
-            owner_telegram_user_id,
-            channel_id,
-            limit=200,
-        )
+        candidates = await list_publishable_candidates(owner_telegram_user_id, channel_id, limit=200)
         if not candidates:
             return AutomaticPublishOutcome(status="empty")
 
@@ -216,29 +145,20 @@ async def automatic_publish_once(
             candidates,
             max_posts_override=max_posts,
         )
-
         if not queue_ranking.ranked:
             return AutomaticPublishOutcome(status="no_eligible")
 
         for ranked in queue_ranking.ranked:
             candidate = ranked.candidate
-
             attempts = await failed_attempt_count(candidate.id)
             if attempts >= int(advanced.retry_limit):
-                await mark_candidate_failed(
-                    owner_telegram_user_id,
-                    candidate.id,
-                )
+                await mark_candidate_failed(owner_telegram_user_id, candidate.id)
                 continue
 
             if candidate.status == STATUS_PENDING:
-                approved = await approve_candidate(
-                    owner_telegram_user_id,
-                    candidate.id,
-                )
+                approved = await approve_candidate(owner_telegram_user_id, candidate.id)
                 if approved is None:
                     continue
-
             elif candidate.status != STATUS_APPROVED:
                 continue
 
@@ -248,19 +168,16 @@ async def automatic_publish_once(
                     owner_telegram_user_id=owner_telegram_user_id,
                     candidate_id=candidate.id,
                 )
-
                 await record_publish_attempt(
                     channel_id=channel_id,
                     candidate_id=candidate.id,
                     status="success",
                 )
-
                 return AutomaticPublishOutcome(
                     status="published",
                     candidate_id=candidate.id,
                     publish_result=publish_result,
                 )
-
             except Exception as exc:
                 error_text = str(exc)[:2000]
                 logging.exception(
@@ -268,21 +185,15 @@ async def automatic_publish_once(
                     channel_id,
                     candidate.id,
                 )
-
                 await record_publish_attempt(
                     channel_id=channel_id,
                     candidate_id=candidate.id,
                     status="failed",
                     error_message=error_text,
                 )
-
                 updated_attempts = await failed_attempt_count(candidate.id)
                 if updated_attempts >= int(advanced.retry_limit):
-                    await mark_candidate_failed(
-                        owner_telegram_user_id,
-                        candidate.id,
-                    )
-
+                    await mark_candidate_failed(owner_telegram_user_id, candidate.id)
                 return AutomaticPublishOutcome(
                     status="failed",
                     candidate_id=candidate.id,

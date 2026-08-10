@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-amazondealsbot}
+      POSTGRES_USER: ${POSTGRES_USER:-amazondealsbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Imposta POSTGRES_PASSWORD nel file .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?Imposta DOCKER_DATABASE_URL nel file .env}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?Imposta DOCKER_DATABASE_URL nel file .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DOCKER_DATABASE_URL:?Imposta DOCKER_DATABASE_URL nel file .env}
+    command: ["uvicorn", "app.webapp:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:

@@ -76,6 +76,7 @@ def build_demo_products(
 ]:
     excellent = ProductSnapshot(
         asin="B0DEMO0001",
+        offer_type="lightning",
         title=(
             "DEMO - Smartphone "
             "offerta eccellente"
@@ -105,6 +106,7 @@ def build_demo_products(
 
     good = ProductSnapshot(
         asin="B0DEMO0002",
+        offer_type="coupon",
         title=(
             "DEMO - Casa e cucina "
             "offerta buona"
@@ -134,6 +136,7 @@ def build_demo_products(
 
     weak_discount = ProductSnapshot(
         asin="B0DEMO0003",
+        offer_type="lowest",
         title=(
             "DEMO - Elettronica "
             "sconto basso"
@@ -163,6 +166,7 @@ def build_demo_products(
 
     unavailable = ProductSnapshot(
         asin="B0DEMO0004",
+        offer_type="normal",
         title=(
             "DEMO - Sport "
             "non disponibile"
@@ -194,6 +198,7 @@ def build_demo_products(
 
     missing_price = ProductSnapshot(
         asin="B0DEMO0005",
+        offer_type="normal",
         title=(
             "DEMO - Casa "
             "prezzo mancante"

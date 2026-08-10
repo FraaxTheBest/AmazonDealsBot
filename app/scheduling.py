@@ -707,13 +707,12 @@ async def receive_schedule_datetime(
         )
     )
 
-    post_text = (
-        rendered_post
-        + "\n\n"
-        "⚠️ <i>Dati demo: "
-        "provider Amazon reale "
-        "non ancora collegato.</i>"
-    )
+    post_text = rendered_post
+    if settings.amazon_provider == "demo":
+        post_text += (
+            "\n\n⚠️ <i>Dati demo: provider Amazon reale "
+            "non ancora collegato.</i>"
+        )
 
     if (
         product.image_url
