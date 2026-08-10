@@ -65,7 +65,6 @@ class ScheduledPost(Base):
         )
     )
 
-    # Snapshot completo del prodotto.
     product_json: Mapped[str] = (
         mapped_column(
             Text,
@@ -73,11 +72,6 @@ class ScheduledPost(Base):
         )
     )
 
-    # Testo già renderizzato.
-    #
-    # Se cambi template dopo aver
-    # programmato il post, questo
-    # post resterà identico.
     post_text: Mapped[str] = (
         mapped_column(
             Text,
@@ -132,6 +126,35 @@ class ScheduledPost(Base):
     )
 
 
+def normalize_utc(
+    value: datetime,
+) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(
+            tzinfo=timezone.utc
+        )
+
+    return value.astimezone(
+        timezone.utc
+    )
+
+
+async def get_owner(
+    telegram_user_id: int,
+) -> User | None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(User).where(
+                User.telegram_user_id
+                == telegram_user_id
+            )
+        )
+
+        return (
+            result.scalar_one_or_none()
+        )
+
+
 async def create_scheduled_post(
     owner_telegram_user_id: int,
     channel_id: int,
@@ -184,19 +207,9 @@ async def create_scheduled_post(
                 "Canale non disponibile."
             )
 
-        if run_at_utc.tzinfo is None:
-            run_at_utc = (
-                run_at_utc.replace(
-                    tzinfo=timezone.utc
-                )
-            )
-
-        else:
-            run_at_utc = (
-                run_at_utc.astimezone(
-                    timezone.utc
-                )
-            )
+        run_at_utc = normalize_utc(
+            run_at_utc
+        )
 
         product_json = json.dumps(
             product.model_dump(
@@ -233,6 +246,11 @@ async def create_scheduled_post(
 
 async def list_pending_scheduled_posts(
 ) -> list[ScheduledPost]:
+    """
+    Utilizzato all'avvio
+    da APScheduler.
+    """
+
     async with SessionLocal() as session:
         result = await session.execute(
             select(ScheduledPost)
@@ -250,12 +268,68 @@ async def list_pending_scheduled_posts(
         )
 
 
+async def list_owner_pending_posts(
+    owner_telegram_user_id: int,
+) -> list[
+    tuple[
+        ScheduledPost,
+        Channel,
+    ]
+]:
+    """
+    Lista dei post pending
+    visibile nel pannello admin.
+    """
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                ScheduledPost,
+                Channel,
+            )
+            .join(
+                Channel,
+                ScheduledPost.channel_id
+                == Channel.id,
+            )
+            .join(
+                User,
+                ScheduledPost.owner_id
+                == User.id,
+            )
+            .where(
+                User.telegram_user_id
+                == (
+                    owner_telegram_user_id
+                ),
+                ScheduledPost.status
+                == STATUS_PENDING,
+            )
+            .order_by(
+                ScheduledPost.run_at
+            )
+        )
+
+        return [
+            (
+                row[0],
+                row[1],
+            )
+            for row in result.all()
+        ]
+
+
 async def get_scheduled_delivery(
     post_id: int,
 ) -> tuple[
     ScheduledPost,
     Channel,
 ] | None:
+    """
+    Utilizzato dal job
+    automatico.
+    """
+
     async with SessionLocal() as session:
         result = await session.execute(
             select(
@@ -284,6 +358,158 @@ async def get_scheduled_delivery(
         )
 
 
+async def get_owner_scheduled_post(
+    owner_telegram_user_id: int,
+    post_id: int,
+) -> tuple[
+    ScheduledPost,
+    Channel,
+] | None:
+    """
+    Recupera un post verificando
+    che appartenga all'admin.
+    """
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                ScheduledPost,
+                Channel,
+            )
+            .join(
+                Channel,
+                ScheduledPost.channel_id
+                == Channel.id,
+            )
+            .join(
+                User,
+                ScheduledPost.owner_id
+                == User.id,
+            )
+            .where(
+                ScheduledPost.id
+                == post_id,
+                User.telegram_user_id
+                == (
+                    owner_telegram_user_id
+                ),
+            )
+        )
+
+        row = result.first()
+
+        if row is None:
+            return None
+
+        return (
+            row[0],
+            row[1],
+        )
+
+
+async def cancel_scheduled_post(
+    owner_telegram_user_id: int,
+    post_id: int,
+) -> bool:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                ScheduledPost
+            )
+            .join(
+                User,
+                ScheduledPost.owner_id
+                == User.id,
+            )
+            .where(
+                ScheduledPost.id
+                == post_id,
+                User.telegram_user_id
+                == (
+                    owner_telegram_user_id
+                ),
+                ScheduledPost.status
+                == STATUS_PENDING,
+            )
+        )
+
+        post = (
+            result.scalar_one_or_none()
+        )
+
+        if post is None:
+            return False
+
+        post.status = (
+            STATUS_CANCELLED
+        )
+
+        post.updated_at = (
+            datetime.now(
+                timezone.utc
+            )
+        )
+
+        await session.commit()
+
+        return True
+
+
+async def reschedule_scheduled_post(
+    owner_telegram_user_id: int,
+    post_id: int,
+    new_run_at_utc: datetime,
+) -> ScheduledPost | None:
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(
+                ScheduledPost
+            )
+            .join(
+                User,
+                ScheduledPost.owner_id
+                == User.id,
+            )
+            .where(
+                ScheduledPost.id
+                == post_id,
+                User.telegram_user_id
+                == (
+                    owner_telegram_user_id
+                ),
+                ScheduledPost.status
+                == STATUS_PENDING,
+            )
+        )
+
+        post = (
+            result.scalar_one_or_none()
+        )
+
+        if post is None:
+            return None
+
+        post.run_at = normalize_utc(
+            new_run_at_utc
+        )
+
+        post.updated_at = (
+            datetime.now(
+                timezone.utc
+            )
+        )
+
+        post.error_message = None
+
+        await session.commit()
+
+        await session.refresh(
+            post
+        )
+
+        return post
+
+
 async def mark_scheduled_published(
     post_id: int,
 ) -> None:
@@ -302,7 +528,9 @@ async def mark_scheduled_published(
         if post is None:
             return
 
-        post.status = STATUS_PUBLISHED
+        post.status = (
+            STATUS_PUBLISHED
+        )
 
         post.published_at = (
             datetime.now(
