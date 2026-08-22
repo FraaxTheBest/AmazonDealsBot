@@ -1,7 +1,7 @@
 def import_all_models() -> None:
     """Importa i moduli che dichiarano modelli SQLAlchemy.
 
-    Necessario prima di create_all/Alembic così metadata conosce tutte le tabelle.
+    Necessario prima di create_all/Alembic cosi' metadata conosce tutte le tabelle.
     """
     import app.database  # noqa: F401
     import app.autopost_store  # noqa: F401
@@ -16,3 +16,4 @@ def import_all_models() -> None:
     import app.shortlink_store  # noqa: F401
     import app.ai_store  # noqa: F401
     import app.drafts_store  # noqa: F401
+    import app.social_store  # noqa: F401

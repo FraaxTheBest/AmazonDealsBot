@@ -54,6 +54,48 @@ class Settings(BaseSettings):
     # Backup
     backup_dir: str = "./backups"
 
+    # =========================================================
+    # SOCIAL HUB
+    # =========================================================
+    social_enabled: bool = True
+
+    # Una piattaforma e' realmente pronta soltanto quando il flag e' true
+    # E le relative credenziali sono presenti.
+    social_facebook_enabled: bool = False
+    social_instagram_enabled: bool = False
+    social_pinterest_enabled: bool = False
+    social_telegram_enabled: bool = False
+    social_whatsapp_enabled: bool = False
+
+    # Versione API Meta usata dai client Social Hub.
+    meta_graph_api_version: str = "v23.0"
+    social_http_timeout_seconds: float = 30.0
+
+    # Meta / Facebook
+    meta_system_user_access_token: SecretStr | None = None
+    facebook_page_id: str | None = None
+    # Opzionale: se presente viene usato direttamente. Se vuoto, il bot prova
+    # a ricavarlo automaticamente dal System User token.
+    facebook_page_access_token: SecretStr | None = None
+
+    # Instagram API with Instagram Login
+    instagram_access_token: SecretStr | None = None
+    instagram_app_id: str | None = None
+    instagram_app_secret: SecretStr | None = None
+    instagram_account_id: str | None = None
+
+    # Pinterest - predisposto, ma Phase 1 resta bloccata finche' non c'e' API
+    pinterest_app_id: str | None = None
+    pinterest_app_secret: SecretStr | None = None
+    pinterest_access_token: SecretStr | None = None
+    pinterest_board_id: str | None = None
+
+    # Telegram Social - predisposto per il prossimo sblocco
+    social_telegram_channel_id: str | None = None
+
+    # WhatsApp - solo placeholder finche' non definiamo un metodo ufficiale
+    social_whatsapp_channel_id: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

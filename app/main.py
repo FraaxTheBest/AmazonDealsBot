@@ -33,6 +33,7 @@ from app.scheduling import router as scheduling_router
 from app.scheduler_service import start_scheduler, stop_scheduler
 from app.shortlink_ui import router as shortlink_router
 from app.security import AdminOnlyMiddleware, SimpleRateLimitMiddleware
+from app.social_ui import router as social_router
 from app.stats_ui import router as stats_router
 from app.templates import router as templates_router
 
@@ -54,6 +55,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🤖 Autoposting", callback_data="menu:autopost"),
             InlineKeyboardButton(text="📊 Statistiche", callback_data="menu:stats"),
         ],
+        [InlineKeyboardButton(text="🌐 Social Hub", callback_data="menu:social")],
         [InlineKeyboardButton(text="⚙️ Impostazioni", callback_data="menu:settings")],
     ])
 
@@ -140,6 +142,7 @@ async def main() -> None:
     dispatcher.include_router(ai_router)
     dispatcher.include_router(shortlink_router)
     dispatcher.include_router(extras_router)
+    dispatcher.include_router(social_router)
 
     await bot.delete_webhook(drop_pending_updates=True)
 
@@ -150,7 +153,7 @@ async def main() -> None:
         manual_scheduler_started = True
         await start_autopost_scheduler(bot)
         autopost_scheduler_started = True
-        logging.info("AmazonDealsBot final phases avviato.")
+        logging.info("AmazonDealsBot final phases + Social Hub avviato.")
         await dispatcher.start_polling(bot)
     finally:
         if autopost_scheduler_started:
